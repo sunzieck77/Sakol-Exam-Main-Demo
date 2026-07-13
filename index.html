@@ -1,0 +1,2589 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+    <title>ระบบจัดการสอบ - โรงเรียนสกลวิทยา</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#F52746',
+                        'primary-dark': '#d41f3a',
+                        'primary-light': '#f85a73',
+                    },
+                    fontFamily: {
+                        sans: ['Prompt', 'sans-serif'],
+                    },
+                    fontSize: {
+                        'xxs': '10px',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Google Fonts: Prompt -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <!-- SheetJS (XLSX Parsing Library) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <style>
+        body { font-family: 'Prompt', sans-serif; background-color: #f3f4f6; color: #111827; }
+        .glass-header { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+        .loader { border-top-color: #F52746; -webkit-animation: spinner 1.5s linear infinite; animation: spinner 1.5s linear infinite; }
+        @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Skeleton Animation */
+        .skeleton { background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%); background-size: 200% 100%; animation: loading 1.5s infinite; }
+        @keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+        /* Custom Scrollbar for tables */
+        .table-container::-webkit-scrollbar { height: 6px; width: 6px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="text-sm md:text-base">
+
+    <!-- Navbar -->
+    <nav class="glass-header sticky top-0 z-50 border-b border-gray-200 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center cursor-pointer" onclick="app.navigate('home')">
+                    <img class="h-10 w-auto rounded-md shadow-sm" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSVcb4_iotfwEJf9W6CNhIqY-MJkwz0NC6xH8PiXoy2qQuBQoszEcMZpnE&s=10" alt="โรงเรียนสกลวิทยา">
+                    <div class="ml-3 flex flex-col">
+                        <span class="font-bold text-lg leading-tight text-gray-900">โรงเรียนสกลวิทยา</span>
+                        <span class="text-xs text-primary font-semibold">ระบบจัดการสอบ</span>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button id="navAdminBtn" class="p-2 text-gray-500 hover:text-primary transition-colors rounded-full hover:bg-red-50" onclick="app.promptAdminLogin()">
+                        <i class="ph ph-gear text-2xl"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Top Navigation Bar (Back Button & Breadcrumbs) -->
+    <div id="topNavContainer" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 hidden flex-col sm:flex-row sm:items-center gap-3 md:gap-4">
+        <button id="globalBackBtn" onclick="app.goBack()" class="flex items-center justify-center text-sm text-gray-700 hover:text-primary transition bg-white border border-gray-300 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50">
+            <i class="ph ph-arrow-left mr-1.5 text-lg"></i> ย้อนกลับ
+        </button>
+        <nav class="flex text-xs md:text-sm text-gray-500 font-medium overflow-x-auto hide-scroll" aria-label="Breadcrumb" id="breadcrumbList">
+            <!-- Dynamic Breadcrumbs -->
+        </nav>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pb-24" id="mainContent">
+        <!-- Content will be injected here -->
+    </main>
+
+    <!-- Global Modals Container -->
+    <div id="modalContainer"></div>
+
+    <!-- Firebase SDK (Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+        import { getDatabase, ref, set, get, child, push, update, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCG5jdaYdcKeAe0yVBB-IOcPaWqMF6Ioa4",
+            authDomain: "sakol-exam-demo.firebaseapp.com",
+            databaseURL: "https://sakol-exam-demo-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "sakol-exam-demo",
+            storageBucket: "sakol-exam-demo.firebasestorage.app",
+            messagingSenderId: "762406440249",
+            appId: "1:762406440249:web:a2aef8217dcd31094dece8"
+        };
+
+        // Initialize Firebase
+        const firebaseApp = initializeApp(firebaseConfig);
+        const db = getDatabase(firebaseApp);
+
+        // ==========================================
+        // SYSTEM CORE & STATE MANAGEMENT
+        // ==========================================
+        window.app = {
+            db: db,
+            state: {
+                isAdmin: false,
+                currentView: 'home',
+                breadcrumbs: [{ label: 'หน้าแรก', view: 'home' }],
+                history: [], // Stack สำหรับการกดย้อนกลับ
+                cache: { teachers: null, classes: null }, // Simple memory cache
+                pagination: { page: 1, limit: 12 },
+                tempData: {}, // For passing data between views
+                searchQuery: "", // สำหรับตัวค้นหา
+                statusFilter: "all", // ตัวกรองสถานะ (all, graded, partial, ungraded)
+                searchTimeout: null // สำหรับ Debounce ป้องกันพิมพ์แล้วรีเฟรชถี่
+            },
+
+            // --- Utilities ---
+            toast: Swal.mixin({
+                toast: true, position: 'top-end', showConfirmButton: false, timer: 3000,
+                timerProgressBar: true, didOpen: (toast) => {
+                    toast.addEventListener('mouseenter', Swal.stopTimer)
+                    toast.addEventListener('mouseleave', Swal.resumeTimer)
+                }
+            }),
+
+            showLoading: () => {
+                Swal.fire({ title: 'กำลังโหลดข้อมูล...', allowOutsideClick: false, showConfirmButton: false, 
+                    willOpen: () => { Swal.showLoading(); } 
+                });
+            },
+            hideLoading: () => { Swal.close(); },
+
+            // Security: Obfuscated password check ("skexam")
+            checkPwd: (p) => p === atob('c2tleGFt'),
+
+            // --- Database Helpers (Lazy Fetching) ---
+            api: {
+                get: async (path, force = false) => {
+                    if (!force && app.state.cache[path]) return app.state.cache[path];
+                    try {
+                        const snapshot = await get(child(ref(db), path));
+                        const data = snapshot.exists() ? snapshot.val() : null;
+                        if(path === 'teachers' || path === 'classes') app.state.cache[path] = data;
+                        return data;
+                    } catch (e) {
+                        console.error(e);
+                        app.toast.fire({ icon: 'error', title: 'เกิดข้อผิดพลาดในการดึงข้อมูล' });
+                        return null;
+                    }
+                },
+                set: async (path, data) => {
+                    try { await set(ref(db, path), data); return true; } 
+                    catch (e) { console.error(e); return false; }
+                },
+                update: async (updates) => {
+                    try { await update(ref(db), updates); return true; } 
+                    catch (e) { console.error(e); return false; }
+                },
+                remove: async (path) => {
+                    try { await remove(ref(db, path)); return true; } 
+                    catch (e) { console.error(e); return false; }
+                },
+                push: async (path, data) => {
+                    try { 
+                        const newRef = push(ref(db, path));
+                        await set(newRef, data); 
+                        return newRef.key;
+                    } catch (e) { console.error(e); return null; }
+                },
+                logAction: async (action, details, refId = "", extraData = null) => {
+                    if(!app.state.isAdmin) return;
+                    await app.api.push('history', {
+                        action, details, refId, extraData, timestamp: Date.now()
+                    });
+                }
+            },
+
+            // --- Search Debounce Handler ---
+            handleSearch: (val, actionObj) => {
+                app.state.searchQuery = val;
+                app.state.pagination.page = 1;
+                
+                clearTimeout(app.state.searchTimeout);
+                app.state.searchTimeout = setTimeout(() => {
+                    if (actionObj.type === 'renderView') {
+                        app.renderView(true); // true = skip skeleton to prevent jumping
+                    } else if (actionObj.type === 'loadAdminTab') {
+                        app.loadAdminTab(actionObj.tab, true);
+                    }
+                }, 400); // รอผู้ใช้หยุดพิมพ์ 400ms ก่อนรีเฟรชข้อมูล
+            },
+
+            // --- Navigation & Rendering ---
+            navigate: (view, params = {}, isBack = false) => {
+                // บันทึกประวัติเพื่อปุ่มย้อนกลับ
+                if (!isBack && app.state.currentView && app.state.currentView !== view) {
+                    app.state.history.push({
+                        view: app.state.currentView,
+                        params: JSON.parse(JSON.stringify(app.state.tempData)),
+                        searchQuery: app.state.searchQuery,
+                        statusFilter: app.state.statusFilter,
+                        page: app.state.pagination.page
+                    });
+                }
+
+                app.state.currentView = view;
+                app.state.tempData = params;
+                
+                // รีเซ็ตค่าการค้นหาและหน้าเมื่อไปยังหน้าใหม่
+                if (!isBack) {
+                    app.state.pagination.page = 1;
+                    app.state.searchQuery = "";
+                    app.state.statusFilter = "all";
+                }
+                
+                // Update Top Navbar Visibility (Back Button)
+                const tnc = document.getElementById('topNavContainer');
+                if (view === 'home') {
+                    app.state.breadcrumbs = [{ label: 'หน้าแรก', view: 'home' }];
+                    tnc.classList.add('hidden');
+                    tnc.classList.remove('flex');
+                    app.state.history = []; // ล้างประวัติเมื่ออยู่หน้าแรก
+                } else {
+                    tnc.classList.remove('hidden');
+                    tnc.classList.add('flex');
+                    
+                    // สร้าง Breadcrumbs ตาม View
+                    if(view === 'public-teachers') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' }, 
+                            { label: 'รายชื่อครูผู้สอน', view: 'public-teachers' }
+                        ];
+                    }
+                    if(view === 'public-exams') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' }, 
+                            { label: 'รายชื่อครูผู้สอน', view: 'public-teachers' }, 
+                            { label: `รายการสอบของ ${params.teacherName}`, view: 'public-exams', params: params }
+                        ];
+                    }
+                    if(view === 'public-exam-scores') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' },
+                            { label: 'รายชื่อครูผู้สอน', view: 'public-teachers' },
+                            { label: `รายการสอบของ ${params.teacherName}`, view: 'public-exams', params: { teacherId: params.teacherId, teacherName: params.teacherName } },
+                            { label: params.examSubject, view: 'public-exam-scores', params: params }
+                        ];
+                    }
+                    if(view === 'admin-dashboard') {
+                        app.state.breadcrumbs = [{ label: 'หน้าแรก', view: 'home' }, { label: 'จัดการระบบ', view: 'admin-dashboard' }];
+                    }
+                    if(view === 'admin-teacher-exams') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' }, 
+                            { label: 'จัดการระบบ', view: 'admin-dashboard' },
+                            { label: `รายการสอบของ ${params.teacherName}`, view: 'admin-teacher-exams', params }
+                        ];
+                    }
+                    if(view === 'admin-manage-scores') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' }, 
+                            { label: 'จัดการระบบ', view: 'admin-dashboard' },
+                            { label: `รายการสอบของ ${params.teacherName || ''}`, view: 'admin-teacher-exams', params: { teacherId: params.teacherId, teacherName: params.teacherName } },
+                            { label: `จัดการคะแนน ${params.subjectName}`, view: 'admin-manage-scores', params }
+                        ];
+                    }
+                    if(view === 'admin-class-students') {
+                        app.state.breadcrumbs = [
+                            { label: 'หน้าแรก', view: 'home' }, 
+                            { label: 'จัดการระบบ', view: 'admin-dashboard' },
+                            { label: `นักเรียนชั้น ${params.className}`, view: 'admin-class-students', params }
+                        ];
+                    }
+                }
+                app.renderBreadcrumbs();
+                app.renderView();
+            },
+
+            // ระบบย้อนกลับ
+            goBack: () => {
+                if (app.state.history.length > 0) {
+                    const prev = app.state.history.pop();
+                    app.state.searchQuery = prev.searchQuery;
+                    app.state.statusFilter = prev.statusFilter;
+                    app.state.pagination.page = prev.page || 1;
+                    app.navigate(prev.view, prev.params, true);
+                } else {
+                    app.navigate('home', {}, true);
+                }
+            },
+
+            renderBreadcrumbs: () => {
+                const list = document.getElementById('breadcrumbList');
+                list.innerHTML = app.state.breadcrumbs.map((b, i) => {
+                    const isLast = i === app.state.breadcrumbs.length - 1;
+                    const paramsStr = b.params ? JSON.stringify(b.params).replace(/"/g, '&quot;') : '{}';
+                    return `
+                        <div class="flex items-center space-x-1.5 whitespace-nowrap">
+                            ${i > 0 ? '<i class="ph ph-caret-right text-gray-400"></i>' : ''}
+                            <a href="#" onclick="app.navigate('${b.view}', ${paramsStr})" 
+                               class="${isLast ? 'text-gray-800 font-semibold cursor-default pointer-events-none' : 'hover:text-primary transition'}">
+                               ${b.label}
+                            </a>
+                        </div>
+                    `;
+                }).join('');
+            },
+
+            renderView: async (skipLoading = false) => {
+                let focusData = null;
+                // รักษาเคอร์เซอร์โฟกัสหากกำลังค้นหา
+                if (skipLoading) {
+                    const active = document.activeElement;
+                    if(active && active.id && active.tagName === 'INPUT') {
+                        try { focusData = { id: active.id, start: active.selectionStart, end: active.selectionEnd }; } catch(e){}
+                    }
+                }
+
+                const container = document.getElementById('mainContent');
+                if (!skipLoading) container.innerHTML = app.components.skeletonFull(); 
+
+                const views = {
+                    'home': app.views.home,
+                    'public-teachers': app.views.publicTeachers,
+                    'public-exams': app.views.publicExams,
+                    'public-exam-scores': app.views.publicExamScores,
+                    'admin-dashboard': app.views.adminDashboard,
+                    'admin-teacher-exams': app.views.adminTeacherExams,
+                    'admin-manage-scores': app.views.adminManageScores,
+                    'admin-class-students': app.views.adminClassStudents
+                };
+
+                if (views[app.state.currentView]) {
+                    const html = await views[app.state.currentView]();
+                    container.innerHTML = html;
+                    if(app.state.currentView === 'admin-dashboard') app.initAdminTabs();
+                } else {
+                    container.innerHTML = `<div class="text-center py-20 text-gray-500">ไม่พบหน้าที่ต้องการ</div>`;
+                }
+                
+                const adminBtn = document.getElementById('navAdminBtn');
+                if(app.state.isAdmin) {
+                    adminBtn.classList.add('text-primary', 'bg-red-50');
+                    adminBtn.classList.remove('text-gray-500');
+                } else {
+                    adminBtn.classList.remove('text-primary', 'bg-red-50');
+                    adminBtn.classList.add('text-gray-500');
+                }
+
+                // คืนค่าตำแหน่งการกะพริบเคอร์เซอร์
+                if (focusData) {
+                    const el = document.getElementById(focusData.id);
+                    if (el) {
+                        el.focus();
+                        try { el.setSelectionRange(focusData.start, focusData.end); } catch(e){}
+                    }
+                }
+            },
+
+            // --- Authentication ---
+            promptAdminLogin: () => {
+                if (app.state.isAdmin) {
+                    app.navigate('admin-dashboard');
+                    return;
+                }
+
+                Swal.fire({
+                    title: 'สำหรับผู้ดูแลระบบ',
+                    input: 'password',
+                    inputPlaceholder: 'กรอกรหัสผ่าน',
+                    showCancelButton: true,
+                    confirmButtonColor: '#F52746',
+                    confirmButtonText: 'เข้าสู่ระบบ',
+                    cancelButtonText: 'ยกเลิก'
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        if (app.checkPwd(result.value)) {
+                            app.state.isAdmin = true;
+                            app.toast.fire({ icon: 'success', title: 'เข้าสู่ระบบผู้ดูแลสำเร็จ' });
+                            app.navigate('admin-dashboard');
+                        } else {
+                            Swal.fire({ icon: 'error', title: 'รหัสผ่านไม่ถูกต้อง', confirmButtonColor: '#F52746' });
+                        }
+                    }
+                });
+            },
+
+            // --- Pagination Helper ---
+            paginate: (array) => {
+                const start = (app.state.pagination.page - 1) * app.state.pagination.limit;
+                const end = start + app.state.pagination.limit;
+                return array.slice(start, end);
+            },
+            renderPagination: (totalItems, actionStr = "app.renderView()") => {
+                const totalPages = Math.ceil(totalItems / app.state.pagination.limit);
+                if (totalPages <= 1) return '';
+                
+                const currentPage = app.state.pagination.page;
+                
+                let btns = '';
+                
+                const prevDisabled = currentPage === 1;
+                btns += `
+                    <button onclick="${prevDisabled ? '' : `app.state.pagination.page = ${currentPage - 1}; ${actionStr};`}" 
+                            class="px-3 py-1 border rounded-md text-sm font-medium transition ${prevDisabled ? 'text-gray-300 border-gray-200 cursor-not-allowed bg-gray-50' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}">
+                        ก่อนหน้า
+                    </button>
+                `;
+
+                for(let i=1; i<=totalPages; i++) {
+                    const active = i === currentPage ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 hover:bg-gray-50 border-gray-300';
+                    btns += `<button onclick="app.state.pagination.page = ${i}; ${actionStr};" class="hidden sm:inline-block px-3 py-1 border rounded-md text-sm ${active}">${i}</button>`;
+                }
+                
+                btns += `<span class="sm:hidden px-3 py-1 text-sm text-gray-500">หน้า ${currentPage}/${totalPages}</span>`;
+
+                const nextDisabled = currentPage === totalPages;
+                btns += `
+                    <button onclick="${nextDisabled ? '' : `app.state.pagination.page = ${currentPage + 1}; ${actionStr};`}" 
+                            class="px-3 py-1 border rounded-md text-sm font-medium transition ${nextDisabled ? 'text-gray-300 border-gray-200 cursor-not-allowed bg-gray-50' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}">
+                        ถัดไป
+                    </button>
+                `;
+
+                return `<div class="flex justify-center items-center space-x-2 mt-6">${btns}</div>`;
+            },
+
+            // คำนวณสถานะการตรวจวิชาสอบ
+            calculateExamStatus: async (examId, classesObj) => {
+                const classIds = Object.keys(classesObj || {});
+                if(classIds.length === 0) return { text: "ยังไม่ตรวจ", color: "bg-gray-100 text-gray-600 border-gray-200" };
+
+                let gradedCount = 0;
+                for(const cid of classIds) {
+                    const scoreData = await app.api.get(`scores/${examId}/${cid}`);
+                    if(scoreData && scoreData._metadata && Object.keys(scoreData).length > 1) {
+                        gradedCount++;
+                    }
+                }
+
+                if(gradedCount === 0) {
+                    return { text: "ยังไม่ตรวจ", color: "bg-red-50 text-red-600 border-red-100" };
+                } else if(gradedCount < classIds.length) {
+                    return { text: `ตรวจแล้ว ${gradedCount}/${classIds.length} ห้อง`, color: "bg-amber-50 text-amber-600 border-amber-100" };
+                } else {
+                    return { text: "ตรวจแล้ว", color: "bg-green-50 text-green-600 border-green-100" };
+                }
+            }
+        };
+
+        // ==========================================
+        // UI COMPONENTS & VIEWS
+        // ==========================================
+        app.components = {
+            skeletonFull: () => `
+                <div class="space-y-4">
+                    <div class="skeleton h-12 w-1/3 rounded-lg"></div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="skeleton h-32 rounded-xl"></div>
+                        <div class="skeleton h-32 rounded-xl"></div>
+                        <div class="skeleton h-32 rounded-xl"></div>
+                    </div>
+                </div>
+            `,
+            emptyState: (msg) => `
+                <div class="flex flex-col items-center justify-center py-12 text-gray-400">
+                    <i class="ph ph-folder-open text-6xl mb-3"></i>
+                    <p>${msg}</p>
+                </div>
+            `
+        };
+
+        app.views = {
+            // 1. Home
+            home: async () => {
+                return `
+                    <div class="flex flex-col items-center justify-center min-h-[60vh] text-center">
+                        <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSVcb4_iotfwEJf9W6CNhIqY-MJkwz0NC6xH8PiXoy2qQuBQoszEcMZpnE&s=10" 
+                             alt="Logo" class="w-32 h-32 object-cover rounded-2xl shadow-lg mb-6 border-4 border-white">
+                        <h1 class="text-3xl md:text-4xl font-bold text-gray-800 mb-2">ยินดีต้อนรับสู่ระบบจัดการสอบ</h1>
+                        <p class="text-gray-500 mb-8">โรงเรียนสกลวิทยา</p>
+                        
+                        <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
+                            <button onclick="app.navigate('public-teachers')" class="flex items-center justify-center px-6 py-3 bg-primary hover:bg-primary-dark text-white rounded-xl font-medium shadow-md shadow-red-200 transition-all transform hover:-translate-y-1">
+                                <i class="ph ph-exam text-xl mr-2"></i> ดูคะแนนสอบ/สร้างรายการสอบ
+                            </button>
+                        </div>
+                    </div>
+                `;
+            },
+
+            // 1.1 Public - Teachers List (First page shown, with Search Box)
+            publicTeachers: async () => {
+                const [teachersObj, examsObj] = await Promise.all([app.api.get('teachers'), app.api.get('exams')]);
+                let teachers = teachersObj ? Object.entries(teachersObj).map(([id, t]) => ({id, ...t})) : [];
+                const exams = examsObj ? Object.values(examsObj) : [];
+                
+                const teacherIdsWithExams = new Set(exams.map(e => e.teacherId));
+                teachers = teachers.filter(t => teacherIdsWithExams.has(t.id));
+                
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    teachers = teachers.filter(t => {
+                        const matchName = t.name.toLowerCase().includes(searchQ);
+                        const teacherExams = exams.filter(e => e.teacherId === t.id);
+                        const matchSubject = teacherExams.some(e => e.subject.toLowerCase().includes(searchQ));
+                        return matchName || matchSubject;
+                    });
+                }
+
+                let html = `
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
+                        <div>
+                            <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3">เลือกครูผู้สอน</h2>
+                            <p class="text-xs text-gray-500 ml-4 mt-1">กรุณาเลือกครูผู้สอนเพื่อดูรายการวิชาสอบ</p>
+                        </div>
+                        <button onclick="app.modals.openCreateExam()" class="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark shadow-sm">
+                            <i class="ph ph-plus mr-1"></i> สร้างรายการสอบ
+                        </button>
+                    </div>
+
+                    <!-- Search Input for Teachers and Exam Subjects -->
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 relative">
+                        <i class="ph ph-magnifying-glass absolute left-7 top-7 text-gray-400"></i>
+                        <input type="text" id="publicTeacherSearch" placeholder="ค้นหาชื่อครูผู้สอน หรือ ชื่อรายวิชาสอบ..." value="${app.state.searchQuery}" 
+                               oninput="app.handleSearch(this.value, {type: 'renderView'})" 
+                               class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                    </div>
+                `;
+
+                if(teachers.length === 0) return html + app.components.emptyState('ยังไม่มีข้อมูลครูผู้สอนที่มีรายการสอบ หรือไม่พบผลการค้นหา');
+
+                const paginated = app.paginate(teachers);
+                html += `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">`;
+                paginated.forEach(t => {
+                    html += `
+                        <div onclick="app.navigate('public-exams', { teacherId: '${t.id}', teacherName: '${t.name}' })" 
+                             class="bg-white p-5 rounded-xl shadow-sm border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition flex items-center group">
+                            <div class="bg-red-50 text-primary w-12 h-12 rounded-full flex items-center justify-center mr-4 group-hover:bg-primary group-hover:text-white transition-colors">
+                                <i class="ph ph-user text-2xl"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h3 class="font-semibold text-gray-800 truncate">${t.name}</h3>
+                                <p class="text-xs text-gray-500 mt-1">ดูรายการวิชาสอบ <i class="ph ph-arrow-right ml-0.5 align-middle"></i></p>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(teachers.length, "app.renderView()");
+                return html;
+            },
+
+            // 1.2 Public - Exams List by Teacher (With Search & Status Filter)
+            publicExams: async () => {
+                const { teacherId, teacherName } = app.state.tempData;
+                const allExams = await app.api.get('exams') || {};
+                
+                let exams = Object.entries(allExams)
+                                    .filter(([id, e]) => e.teacherId === teacherId)
+                                    .map(([id, e]) => ({id, ...e}))
+                                    .sort((a,b) => b.timestamp - a.timestamp);
+
+                for (let e of exams) {
+                    e.statusInfo = await app.calculateExamStatus(e.id, e.classes);
+                }
+
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                const filterVal = app.state.statusFilter;
+
+                if (searchQ) {
+                    exams = exams.filter(e => e.subject.toLowerCase().includes(searchQ));
+                }
+
+                if (filterVal !== "all") {
+                    exams = exams.filter(e => {
+                        if (filterVal === "graded") return e.statusInfo.text === "ตรวจแล้ว";
+                        if (filterVal === "partial") return e.statusInfo.text.startsWith("ตรวจแล้ว ");
+                        if (filterVal === "ungraded") return e.statusInfo.text === "ยังไม่ตรวจ";
+                        return true;
+                    });
+                }
+
+                let html = `
+                    <div class="mb-4 flex flex-col md:flex-row md:items-end justify-between gap-4">
+                        <div>
+                            <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3 mb-1">รายการสอบ</h2>
+                            <p class="text-gray-500 ml-4">ครูผู้สอน: <span class="font-medium text-gray-700">${teacherName}</span></p>
+                        </div>
+                    </div>
+
+                    <!-- Search and Filter Controls -->
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-col sm:flex-row gap-3 items-center">
+                        <div class="relative w-full sm:flex-1">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="publicExamSearch" placeholder="ค้นหาชื่อวิชา..." value="${app.state.searchQuery}" 
+                                   oninput="app.handleSearch(this.value, {type: 'renderView'})" 
+                                   class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                        </div>
+                        <div class="w-full sm:w-48">
+                            <select id="publicStatusFilter" onchange="app.state.statusFilter = this.value; app.state.pagination.page = 1; app.renderView(true);" 
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white">
+                                <option value="all" ${filterVal === 'all' ? 'selected' : ''}>สถานะ: ทั้งหมด</option>
+                                <option value="graded" ${filterVal === 'graded' ? 'selected' : ''}>ตรวจแล้วทั้งหมด</option>
+                                <option value="partial" ${filterVal === 'partial' ? 'selected' : ''}>ตรวจแล้วบางส่วน</option>
+                                <option value="ungraded" ${filterVal === 'ungraded' ? 'selected' : ''}>ยังไม่ตรวจ</option>
+                            </select>
+                        </div>
+                    </div>
+                `;
+
+                if(exams.length === 0) return html + app.components.emptyState('ไม่พบรายการสอบที่ระบุหรือไม่มีรายการสอบสำหรับครูท่านนี้');
+
+                const paginatedExams = app.paginate(exams);
+                html += `<div class="space-y-4">`;
+                
+                paginatedExams.forEach(e => {
+                    const classList = Object.values(e.classes || {}).join(', ');
+                    const date = new Date(e.timestamp).toLocaleDateString('th-TH');
+                    
+                    html += `
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:border-red-100 transition-colors">
+                            <div class="p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between border-b border-gray-100 bg-gray-50 gap-4">
+                                <div>
+                                    <div class="flex items-center gap-2 flex-wrap mb-1">
+                                        <h3 class="text-lg font-bold text-gray-800">${e.subject}</h3>
+                                        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full border ${e.statusInfo.color}">
+                                            ${e.statusInfo.text}
+                                        </span>
+                                    </div>
+                                    <div class="text-xs md:text-sm text-gray-500 flex items-center mt-1.5 space-x-3">
+                                        <span><i class="ph ph-users mr-1"></i> ห้องสอบ: ${classList || '-'}</span>
+                                        <span><i class="ph ph-list-numbers mr-1"></i> ${e.numQuestions} ข้อ</span>
+                                        <span><i class="ph ph-calendar mr-1"></i> ${date}</span>
+                                    </div>
+                                </div>
+                                <button onclick="app.navigate('public-exam-scores', { examId: '${e.id}', examSubject: '${e.subject}', teacherId: '${teacherId}', teacherName: '${teacherName}' })" 
+                                        class="px-4 py-2 bg-white border border-gray-300 text-primary font-medium rounded-lg hover:bg-red-50 hover:border-red-200 transition text-sm whitespace-nowrap shadow-sm">
+                                    ดูคะแนน
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(exams.length, `app.renderView()`);
+                return html;
+            },
+
+            // 1.3 Public - Exam Scores Detail Page
+            publicExamScores: async () => {
+                const { examId, examSubject, teacherName, teacherId } = app.state.tempData;
+                const exam = await app.api.get(`exams/${examId}`);
+                if(!exam) return app.components.emptyState('ไม่พบข้อมูลรายการสอบ');
+
+                const classEntries = Object.entries(exam.classes || {});
+                
+                let html = `
+                    <div class="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+                        <div>
+                            <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3 mb-1">${examSubject}</h2>
+                            <p class="text-gray-500 ml-4">ครูผู้สอน: <span class="font-medium text-gray-700">${teacherName}</span></p>
+                        </div>
+                        <button onclick="app.renderView()" class="flex items-center text-gray-500 hover:text-primary transition bg-white px-3 py-1.5 rounded border border-gray-200 shadow-sm">
+                            <i class="ph ph-arrows-clockwise mr-1"></i> รีเฟรชข้อมูล
+                        </button>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div class="flex border-b border-gray-200 overflow-x-auto hide-scroll bg-gray-50">
+                `;
+                
+                if(classEntries.length === 0) {
+                    html += `</div><div class="p-8 text-center text-gray-500">ไม่มีข้อมูลห้องเรียน</div></div>`;
+                    return html;
+                }
+
+                classEntries.forEach(([cId, cName], i) => {
+                    html += `<button class="public-tab-${examId} ${i===0?'text-primary border-b-2 border-primary bg-white':'text-gray-500'} py-3 px-6 whitespace-nowrap text-sm font-medium focus:outline-none transition-colors" data-id="${cId}" onclick="app.ui.renderPublicClassScores('${examId}', '${cId}', '${cName}')">${cName}</button>`;
+                });
+                
+                html += `</div>
+                    <div id="public-score-content-${examId}" class="p-4 md:p-6 overflow-x-auto table-container">
+                        <div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>
+                    </div>
+                </div>`;
+                
+                // Auto-load first tab after render
+                setTimeout(() => {
+                    if(classEntries.length > 0) {
+                        app.ui.renderPublicClassScores(examId, classEntries[0][0], classEntries[0][1]);
+                    }
+                }, 50);
+                
+                return html;
+            },
+
+            // 2. Admin Dashboard Shell
+            adminDashboard: async () => {
+                return `
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3">การจัดการระบบ</h2>
+                        <p class="text-gray-500 ml-4 mt-1 text-sm">ผู้ดูแลระบบ</p>
+                    </div>
+                    
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <!-- Tabs -->
+                        <div class="flex border-b border-gray-200 overflow-x-auto hide-scroll">
+                            <button class="admin-tab active flex-1 py-4 px-6 text-center font-medium text-primary border-b-2 border-primary focus:outline-none whitespace-nowrap" data-target="admin-exams">
+                                <i class="ph ph-exam text-lg mr-1 align-middle"></i> รายการสอบ
+                            </button>
+                            <button class="admin-tab flex-1 py-4 px-6 text-center font-medium text-gray-500 hover:text-gray-700 focus:outline-none whitespace-nowrap" data-target="admin-classes">
+                                <i class="ph ph-users-three text-lg mr-1 align-middle"></i> ชั้นเรียน
+                            </button>
+                            <button class="admin-tab flex-1 py-4 px-6 text-center font-medium text-gray-500 hover:text-gray-700 focus:outline-none whitespace-nowrap" data-target="admin-teachers">
+                                <i class="ph ph-chalkboard-teacher text-lg mr-1 align-middle"></i> ครูผู้สอน
+                            </button>
+                            <button class="admin-tab flex-1 py-4 px-6 text-center font-medium text-gray-500 hover:text-gray-700 focus:outline-none whitespace-nowrap" data-target="admin-history">
+                                <i class="ph ph-clock-counter-clockwise text-lg mr-1 align-middle"></i> ประวัติการใช้งาน
+                            </button>
+                        </div>
+                        
+                        <!-- Tab Contents -->
+                        <div class="p-6" id="adminTabContent">
+                            <div class="skeleton h-40 w-full rounded-lg"></div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            // ==========================================
+            // Admin Dedicated Views (Separated to integrate with Global Back Button)
+            // ==========================================
+
+            adminTeacherExams: async () => {
+                const { teacherId, teacherName } = app.state.tempData;
+                const allExams = await app.api.get('exams') || {};
+                let exams = Object.entries(allExams).filter(([id, e]) => e.teacherId === teacherId).map(([id, e]) => ({id, ...e}));
+                
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    exams = exams.filter(e => e.subject.toLowerCase().includes(searchQ));
+                }
+
+                for (let e of exams) {
+                    e.statusInfo = await app.calculateExamStatus(e.id, e.classes);
+                }
+
+                let html = `
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3">รายการสอบของ ${teacherName}</h2>
+                        <button onclick="app.modals.openCreateExam()" class="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark shadow-sm">
+                            <i class="ph ph-plus mr-1"></i> สร้างรายการสอบ
+                        </button>
+                    </div>
+
+                    <div class="relative mb-6">
+                        <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                        <input type="text" id="adminTeacherExamsSearch" placeholder="ค้นหาชื่อวิชาสอบ..." value="${app.state.searchQuery}" 
+                               oninput="app.handleSearch(this.value, {type: 'renderView'})" 
+                               class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                    </div>
+
+                    <div class="space-y-4">
+                `;
+
+                if(exams.length === 0) html += app.components.emptyState('ไม่มีรายการสอบ');
+
+                exams.forEach(e => {
+                    html += `
+                        <div class="border border-gray-200 rounded-lg p-4 bg-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <h4 class="font-bold text-lg text-primary">${e.subject}</h4>
+                                    <span class="px-2 py-0.5 text-xs font-semibold rounded border ${e.statusInfo.color}">
+                                        ${e.statusInfo.text}
+                                    </span>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-1">ห้องที่สอบ: ${Object.values(e.classes||{}).join(', ')} | จำนวน: ${e.numQuestions} ข้อ</div>
+                            </div>
+                            <div class="flex items-center gap-2 self-end md:self-auto">
+                                <button onclick="app.modals.openEditExam('${e.id}')" class="p-2 text-blue-500 hover:bg-blue-50 rounded border border-blue-200 transition" title="แก้ไขวิชาสอบ">
+                                    <i class="ph ph-pencil-simple text-lg"></i>
+                                </button>
+                                <button onclick="app.actions.deleteExam('${e.id}', '${teacherId}', '${teacherName}')" class="p-2 text-red-500 hover:bg-red-50 rounded border border-red-200 transition" title="ลบวิชาสอบ">
+                                    <i class="ph ph-trash text-lg"></i>
+                                </button>
+                                <button onclick="app.navigate('admin-manage-scores', { examId: '${e.id}', subjectName: '${e.subject}', teacherId: '${teacherId}', teacherName: '${teacherName}' })" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm font-medium transition border border-gray-300">
+                                    จัดการคะแนน <i class="ph ph-caret-right ml-1"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+                return html;
+            },
+
+            adminManageScores: async () => {
+                const { examId, subjectName } = app.state.tempData;
+                const exam = await app.api.get(`exams/${examId}`);
+                if(!exam) return app.components.emptyState('ไม่พบข้อมูลรายการสอบ');
+
+                const classEntries = Object.entries(exam.classes || {});
+                
+                let html = `
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3">${subjectName}</h2>
+                    </div>
+                    
+                    <div class="flex border-b border-gray-200 overflow-x-auto hide-scroll mb-4 bg-gray-50">
+                `;
+                
+                classEntries.forEach(([cId, cName], i) => {
+                    html += `<button class="score-class-tab ${i===0?'text-primary border-b-2 border-primary bg-white':'text-gray-500'} py-3 px-6 whitespace-nowrap font-medium focus:outline-none transition" data-classid="${cId}" data-classname="${cName}">${cName}</button>`;
+                });
+                html += `</div>
+                    <div id="scoreManagementContent" data-exam="${examId}" data-max="${exam.numQuestions}">
+                        <div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>
+                    </div>
+                `;
+                
+                setTimeout(() => {
+                    const tabs = document.querySelectorAll('.score-class-tab');
+                    tabs.forEach(tab => {
+                        tab.addEventListener('click', () => {
+                            tabs.forEach(t => { t.classList.remove('text-primary', 'border-b-2', 'border-primary', 'bg-white'); t.classList.add('text-gray-500'); });
+                            tab.classList.remove('text-gray-500'); tab.classList.add('text-primary', 'border-b-2', 'border-primary', 'bg-white');
+                            app.ui.renderAdminClassScores(examId, tab.dataset.classid, tab.dataset.classname, exam.numQuestions);
+                        });
+                    });
+                    if(classEntries.length > 0) app.ui.renderAdminClassScores(examId, classEntries[0][0], classEntries[0][1], exam.numQuestions);
+                    else document.getElementById('scoreManagementContent').innerHTML = app.components.emptyState('ไม่ได้ระบุห้องเรียนสำหรับวิชานี้');
+                }, 50);
+
+                return html;
+            },
+
+            adminClassStudents: async () => {
+                const { classId, className } = app.state.tempData;
+                const studentsObj = await app.api.get(`students/${classId}`);
+                let students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
+
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    students = students.filter(s => s.name.toLowerCase().includes(searchQ) || (s.studentCode && s.studentCode.toLowerCase().includes(searchQ)) || s.no.toString() === searchQ);
+                }
+
+                let html = `
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800 border-l-4 border-primary pl-3">นักเรียนชั้น ${className}</h2>
+                        <div class="flex flex-wrap gap-2">
+                            <!-- Normal Actions -->
+                            <div id="std-normal-actions" class="flex space-x-2">
+                                <button onclick="app.ui.toggleStudentEditMode()" class="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-50 shadow-sm transition"><i class="ph ph-pencil-simple mr-1"></i> แก้ไขหลายรายการ</button>
+                                <button onclick="app.ui.toggleStudentDeleteMode()" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded text-sm hover:bg-red-50 shadow-sm transition"><i class="ph ph-trash mr-1"></i> เลือกลบ</button>
+                                <button onclick="app.modals.openAddStudent('${classId}', '${className}')" class="bg-primary text-white px-3 py-1.5 rounded text-sm shadow hover:bg-primary-dark transition"><i class="ph ph-plus mr-1"></i> เพิ่มนักเรียน</button>
+                            </div>
+                            <!-- Edit Actions -->
+                            <div id="std-edit-actions" class="hidden flex space-x-2">
+                                <button onclick="app.renderView()" class="bg-gray-100 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-200 border border-gray-300">ยกเลิก</button>
+                                <button onclick="app.actions.saveBulkEditStudents('${classId}', '${className}')" class="bg-green-500 text-white px-3 py-1.5 rounded text-sm shadow hover:bg-green-600 transition"><i class="ph ph-floppy-disk mr-1"></i> บันทึกข้อมูล</button>
+                            </div>
+                            <!-- Delete Actions -->
+                            <div id="std-delete-actions" class="hidden flex space-x-2">
+                                <button onclick="app.renderView()" class="bg-gray-100 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-200 border border-gray-300">ยกเลิก</button>
+                                <button onclick="app.actions.bulkDeleteStudents('${classId}', '${className}')" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm shadow hover:bg-red-600 transition"><i class="ph ph-trash mr-1"></i> ยืนยันการลบที่เลือก</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Search Box -->
+                    <div class="relative mb-6">
+                        <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                        <input type="text" id="adminClassStudentsSearch" placeholder="ค้นหาชื่อ, รหัส, เลขที่..." value="${app.state.searchQuery}" 
+                               oninput="app.handleSearch(this.value, {type: 'renderView'})" 
+                               class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                    </div>
+
+                    <div class="bg-white border border-gray-200 rounded-lg overflow-hidden table-container overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="std-delete-col hidden px-4 py-3 text-center w-12 border-r border-gray-200">
+                                        <input type="checkbox" onclick="app.ui.toggleAllStudentCheckboxes(this)" class="rounded text-primary focus:ring-primary">
+                                    </th>
+                                    <th class="px-4 py-3 text-center font-medium text-gray-500 w-20">เลขที่</th>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500 w-32">รหัส</th>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500">ชื่อ-สกุล</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200" id="studentListTbody">
+                `;
+
+                if(students.length === 0) html += `<tr><td colspan="4" class="text-center py-6 text-gray-500">ยังไม่มีรายชื่อนักเรียน</td></tr>`;
+
+                students.forEach(s => {
+                    html += `
+                        <tr class="hover:bg-gray-50 group std-row" data-id="${s.id}">
+                            <td class="std-delete-col hidden px-4 py-3 text-center border-r border-gray-100 bg-red-50">
+                                <input type="checkbox" class="std-del-checkbox rounded text-primary focus:ring-primary cursor-pointer" value="${s.id}">
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                <span class="std-view text-gray-600 font-medium">${s.no}</span>
+                                <input type="number" class="std-edit hidden w-full text-center border border-gray-300 rounded px-1 py-1 text-sm focus:border-primary focus:ring-1 focus:ring-primary" value="${s.no}">
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="std-view text-gray-500">${s.studentCode || ''}</span>
+                                <input type="text" class="std-edit hidden w-full border border-gray-300 rounded px-2 py-1 text-sm focus:border-primary focus:ring-1 focus:ring-primary" value="${s.studentCode || ''}">
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="std-view text-gray-800 font-medium">${s.name}</span>
+                                <input type="text" class="std-edit hidden w-full border border-gray-300 rounded px-2 py-1 text-sm focus:border-primary focus:ring-1 focus:ring-primary" value="${s.name}">
+                            </td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table></div>`;
+                return html;
+            }
+        };
+
+        // ==========================================
+        // ADMIN TABS LOGIC
+        // ==========================================
+        app.initAdminTabs = () => {
+            const tabs = document.querySelectorAll('.admin-tab');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    tabs.forEach(t => { t.classList.remove('text-primary', 'border-b-2', 'border-primary'); t.classList.add('text-gray-500'); });
+                    tab.classList.remove('text-gray-500'); tab.classList.add('text-primary', 'border-b-2', 'border-primary');
+                    
+                    app.state.pagination.page = 1;
+                    app.state.searchQuery = "";
+                    app.state.statusFilter = "all";
+                    app.state.tempData.activeTab = tab.dataset.target; // จำสถานะแท็บ
+                    app.loadAdminTab(tab.dataset.target);
+                });
+            });
+            // โหลดแท็บเริ่มต้นหรือแท็บเดิมที่ค้างไว้
+            const initialTab = app.state.tempData.activeTab || 'admin-exams';
+            const targetBtn = document.querySelector(`[data-target="${initialTab}"]`);
+            if(targetBtn) targetBtn.click();
+        };
+
+        app.loadAdminTab = async (tabName, skipLoading = false) => {
+            const container = document.getElementById('adminTabContent');
+            
+            let focusData = null;
+            if (skipLoading) {
+                const active = document.activeElement;
+                if(active && active.id && active.tagName === 'INPUT') {
+                    try { focusData = { id: active.id, start: active.selectionStart, end: active.selectionEnd }; } catch(e){}
+                }
+            }
+
+            if (!skipLoading) {
+                container.innerHTML = `<div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>`;
+            }
+            
+            if(tabName === 'admin-exams') container.innerHTML = await app.adminTabs.exams();
+            if(tabName === 'admin-classes') container.innerHTML = await app.adminTabs.classes();
+            if(tabName === 'admin-teachers') container.innerHTML = await app.adminTabs.teachers();
+            if(tabName === 'admin-history') container.innerHTML = await app.adminTabs.history();
+
+            if (focusData) {
+                const el = document.getElementById(focusData.id);
+                if (el) {
+                    el.focus();
+                    try { el.setSelectionRange(focusData.start, focusData.end); } catch(e){}
+                }
+            }
+        };
+
+        app.adminTabs = {
+            exams: async () => {
+                const [teachersObj, examsObj] = await Promise.all([app.api.get('teachers'), app.api.get('exams')]);
+                let teachers = teachersObj ? Object.entries(teachersObj).map(([id, t]) => ({id, ...t})) : [];
+                const exams = examsObj ? Object.values(examsObj) : [];
+                
+                // ค้นหาแบบ Real-time (ชื่อครู หรือ ชื่อวิชา)
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    teachers = teachers.filter(t => {
+                        const matchName = t.name.toLowerCase().includes(searchQ);
+                        const teacherExams = exams.filter(e => e.teacherId === t.id);
+                        const matchSubject = teacherExams.some(e => e.subject.toLowerCase().includes(searchQ));
+                        return matchName || matchSubject;
+                    });
+                }
+
+                let html = `
+                    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
+                        <div class="relative w-full sm:flex-1 max-w-sm">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="adminTabExamsSearch" placeholder="ค้นหาชื่อครู หรือ ชื่อวิชาสอบ..." value="${app.state.searchQuery}" 
+                                   oninput="app.handleSearch(this.value, {type: 'loadAdminTab', tab: 'admin-exams'})" 
+                                   class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                `;
+
+                if(teachers.length === 0) html += `<div class="col-span-full">${app.components.emptyState('ไม่พบข้อมูลการค้นหา')}</div>`;
+
+                app.paginate(teachers).forEach(t => {
+                    html += `
+                        <div onclick="app.navigate('admin-teacher-exams', { teacherId: '${t.id}', teacherName: '${t.name}' })" 
+                             class="border border-gray-200 rounded-lg p-4 hover:border-primary hover:shadow cursor-pointer transition flex justify-between items-center bg-gray-50 hover:bg-white">
+                            <div class="flex items-center">
+                                <i class="ph ph-folder text-2xl text-gray-400 mr-3"></i>
+                                <span class="font-medium text-gray-700">${t.name}</span>
+                            </div>
+                            <i class="ph ph-caret-right text-gray-400"></i>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(teachers.length, "app.loadAdminTab('admin-exams')");
+                return html;
+            },
+
+            classes: async () => {
+                const classesObj = await app.api.get('classes');
+                let classes = classesObj ? Object.entries(classesObj).map(([id, c]) => ({id, ...c})) : [];
+                
+                classes.sort((a,b) => {
+                    if(a.level === b.level) return a.room.localeCompare(b.room, undefined, {numeric: true});
+                    return a.level.localeCompare(b.level);
+                });
+
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    classes = classes.filter(c => c.name.toLowerCase().includes(searchQ));
+                }
+
+                let html = `
+                    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
+                        <div class="relative w-full sm:flex-1 max-w-sm">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="adminTabClassesSearch" placeholder="ค้นหาชื่อชั้นเรียน..." value="${app.state.searchQuery}" 
+                                   oninput="app.handleSearch(this.value, {type: 'loadAdminTab', tab: 'admin-classes'})" 
+                                   class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                        </div>
+                        <div class="flex gap-2 whitespace-nowrap">
+                            <button onclick="app.modals.openImportExcel()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm shadow transition flex items-center">
+                                <i class="ph ph-file-xls text-lg mr-1"></i> นำเข้าจาก Excel
+                            </button>
+                            <button onclick="app.modals.openAddClass()" class="bg-primary text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-primary-dark transition flex items-center">
+                                <i class="ph ph-plus mr-1"></i> เพิ่มชั้นเรียน
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                `;
+
+                if(classes.length === 0) html += `<div class="col-span-full">${app.components.emptyState('ยังไม่มีข้อมูล')}</div>`;
+                
+                app.paginate(classes).forEach(c => {
+                    html += `
+                        <div class="relative group border border-gray-200 rounded-lg bg-white shadow-sm hover:border-primary transition">
+                            <div onclick="app.navigate('admin-class-students', { classId: '${c.id}', className: '${c.name}' })" class="p-6 text-center cursor-pointer">
+                                <div class="text-3xl font-bold text-gray-700 mb-1">${c.name}</div>
+                                <div class="text-xs text-gray-400">คลิกเพื่อจัดการนักเรียน</div>
+                            </div>
+                            <div class="absolute top-2 right-2 flex space-x-1 opacity-0 group-hover:opacity-100 transition">
+                                <button onclick="event.stopPropagation(); app.modals.openEditClass('${c.id}', '${c.level}', '${c.room}', '${c.name}')" class="p-1.5 text-blue-400 hover:text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-full transition shadow-sm">
+                                    <i class="ph ph-pencil-simple"></i>
+                                </button>
+                                <button onclick="event.stopPropagation(); app.actions.deleteClass('${c.id}', '${c.name}')" class="p-1.5 text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 rounded-full transition shadow-sm">
+                                    <i class="ph ph-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(classes.length, "app.loadAdminTab('admin-classes')");
+                return html;
+            },
+
+            teachers: async () => {
+                const teachersObj = await app.api.get('teachers');
+                let teachers = teachersObj ? Object.entries(teachersObj).map(([id, t]) => ({id, ...t})) : [];
+                
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    teachers = teachers.filter(t => t.name.toLowerCase().includes(searchQ));
+                }
+
+                let html = `
+                    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
+                        <div class="relative w-full sm:flex-1 max-w-sm">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="adminTabTeachersSearch" placeholder="ค้นหาชื่อครู..." value="${app.state.searchQuery}" 
+                                   oninput="app.handleSearch(this.value, {type: 'loadAdminTab', tab: 'admin-teachers'})" 
+                                   class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                        </div>
+                        <button onclick="app.modals.openAddTeacher()" class="bg-primary text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-primary-dark whitespace-nowrap">
+                            <i class="ph ph-plus mr-1"></i> เพิ่มครูผู้สอน
+                        </button>
+                    </div>
+                    <div class="bg-white border border-gray-200 rounded-lg overflow-hidden table-container overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left font-medium text-gray-500 uppercase tracking-wider w-16">#</th>
+                                    <th class="px-6 py-3 text-left font-medium text-gray-500 uppercase tracking-wider">ชื่อ-สกุล</th>
+                                    <th class="px-6 py-3 text-right font-medium text-gray-500 uppercase tracking-wider w-24">จัดการ</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                `;
+                
+                if(teachers.length === 0) html += `<tr><td colspan="3" class="text-center py-4 text-gray-500">ไม่มีข้อมูล</td></tr>`;
+
+                const start = (app.state.pagination.page - 1) * app.state.pagination.limit;
+                app.paginate(teachers).forEach((t, i) => {
+                    html += `
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-6 py-4 whitespace-nowrap text-gray-500">${start + i + 1}</td>
+                            <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-800" id="t-name-${t.id}">${t.name}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <button onclick="app.modals.openEditTeacher('${t.id}', '${t.name}')" class="text-blue-500 hover:text-blue-700 mx-1"><i class="ph ph-pencil-simple"></i></button>
+                                <button onclick="app.actions.deleteTeacher('${t.id}', '${t.name}')" class="text-red-500 hover:text-red-700 mx-1"><i class="ph ph-trash"></i></button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table></div>` + app.renderPagination(teachers.length, "app.loadAdminTab('admin-teachers')");
+                return html;
+            },
+
+            history: async () => {
+                const historyObj = await app.api.get('history');
+                const history = historyObj ? Object.entries(historyObj).map(([id, h]) => ({id, ...h})).sort((a,b) => b.timestamp - a.timestamp) : [];
+                
+                let html = `
+                    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
+                        <h3 class="text-lg font-bold text-gray-800">ประวัติการใช้งาน</h3>
+                        <div class="flex flex-wrap gap-2">
+                            <!-- Normal Mode -->
+                            <div id="hist-normal-actions" class="${history.length === 0 ? 'hidden' : ''}">
+                                <button onclick="app.ui.toggleHistoryDeleteMode()" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded text-sm hover:bg-red-50 shadow-sm transition">
+                                    <i class="ph ph-trash mr-1"></i> เลือกลบประวัติ
+                                </button>
+                            </div>
+                            <!-- Delete Mode -->
+                            <div id="hist-delete-actions" class="hidden flex space-x-2 items-center">
+                                <label class="flex items-center text-sm text-gray-600 mr-2 cursor-pointer">
+                                    <input type="checkbox" onclick="app.ui.toggleAllHistoryCheckboxes(this)" class="rounded text-primary focus:ring-primary mr-1 w-4 h-4">
+                                    เลือกทั้งหมด
+                                </label>
+                                <button onclick="app.loadAdminTab('admin-history')" class="bg-gray-100 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-200 border border-gray-300">ยกเลิก</button>
+                                <button onclick="app.actions.bulkDeleteHistory()" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm shadow hover:bg-red-600 transition"><i class="ph ph-trash mr-1"></i> ยืนยันการลบ</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                if(history.length === 0) return html + app.components.emptyState('ยังไม่มีประวัติการใช้งาน');
+
+                html += `<div class="space-y-3">`;
+                app.paginate(history).forEach(h => {
+                    const date = new Date(h.timestamp).toLocaleString('th-TH');
+                    const hasData = h.extraData && h.extraData.deletedScores;
+                    html += `
+                        <div class="border border-gray-100 rounded-lg p-4 bg-gray-50 flex items-start group relative ${hasData ? 'cursor-pointer hover:bg-gray-100 transition shadow-sm' : ''}"
+                             ${hasData ? `onclick="if(document.getElementById('hist-delete-actions') && !document.getElementById('hist-delete-actions').classList.contains('hidden')) return; app.modals.openDeletedScores('${h.id}')"` : ''}>
+                            
+                            <!-- Checkbox Column -->
+                            <div class="hist-delete-col hidden mr-3 mt-1">
+                                <input type="checkbox" class="hist-del-checkbox rounded text-primary focus:ring-primary cursor-pointer w-4 h-4" value="${h.id}" onclick="event.stopPropagation()">
+                            </div>
+                            
+                            <!-- Content -->
+                            <div class="flex-1">
+                                <div class="flex justify-between items-start mb-2">
+                                    <span class="font-medium text-gray-800">${h.action}</span>
+                                    <span class="text-xs text-gray-400 bg-white px-2 py-1 rounded border border-gray-100"><i class="ph ph-clock mr-1"></i>${date}</span>
+                                </div>
+                                <p class="text-sm text-gray-600">${h.details}</p>
+                                ${hasData ? `<div class="mt-2 text-xs text-primary font-medium flex items-center"><i class="ph ph-eye mr-1 text-base"></i> คลิกเพื่อดูคะแนนเดิมที่ถูกลบ</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(history.length, "app.loadAdminTab('admin-history')");
+                return html;
+            }
+        };
+
+        // ==========================================
+        // DYNAMIC UI BUILDERS (Public Exam Details & Admin Score Edit)
+        // ==========================================
+        app.ui = {
+            renderPublicClassScores: async (examId, classId, className) => {
+                document.querySelectorAll(`.public-tab-${examId}`).forEach(t => {
+                    if(t.dataset.id === classId) {
+                        t.classList.add('text-primary', 'border-b-2', 'border-primary', 'bg-white'); t.classList.remove('text-gray-500');
+                    } else {
+                        t.classList.remove('text-primary', 'border-b-2', 'border-primary', 'bg-white'); t.classList.add('text-gray-500');
+                    }
+                });
+
+                const container = document.getElementById(`public-score-content-${examId}`);
+                container.innerHTML = `<div class="text-center py-4"><i class="ph ph-spinner animate-spin text-xl text-primary"></i></div>`;
+
+                const [studentsObj, scoresObj] = await Promise.all([
+                    app.api.get(`students/${classId}`),
+                    app.api.get(`scores/${examId}/${classId}`)
+                ]);
+
+                let students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
+                const metadata = scoresObj?._metadata || { grader: '-', timestamp: null };
+                const scores = scoresObj || {};
+
+                // Calculate Summary
+                let validScores = [];
+                let absent = 0;
+                students.forEach(s => {
+                    if(scores[s.id] !== undefined && scores[s.id] !== '' && scores[s.id] !== null) {
+                        validScores.push(parseFloat(scores[s.id]));
+                    } else { absent++; }
+                });
+                const max = validScores.length ? Math.max(...validScores) : 0;
+                const min = validScores.length ? Math.min(...validScores) : 0;
+                const avg = validScores.length ? (validScores.reduce((a,b)=>a+b,0)/validScores.length).toFixed(2) : 0;
+
+                let html = `
+                    <!-- Summary -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center mb-6">
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                            <div class="text-xs text-gray-500">สูงสุด</div><div class="text-xl font-bold text-green-500">${max}</div>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                            <div class="text-xs text-gray-500">ต่ำสุด</div><div class="text-xl font-bold text-red-500">${min}</div>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                            <div class="text-xs text-gray-500">เฉลี่ย</div><div class="text-xl font-bold text-blue-500">${avg}</div>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                            <div class="text-xs text-gray-500">ขาดสอบ (ไม่มีคะแนน)</div><div class="text-xl font-bold text-gray-600">${absent} คน</div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3 flex flex-wrap justify-between text-xs text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
+                        <div>ผู้ตรวจ: <span class="font-medium text-gray-700">${metadata.grader || '-'}</span></div>
+                        <div>อัปเดตล่าสุด: ${metadata.timestamp ? new Date(metadata.timestamp).toLocaleString('th-TH') : '-'}</div>
+                    </div>
+                    <div class="border border-gray-200 rounded-lg overflow-hidden table-container">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="px-4 py-3 text-center w-16 text-gray-600">เลขที่</th>
+                                    <th class="px-4 py-3 text-left text-gray-600">ชื่อ-สกุล</th>
+                                    <th class="px-4 py-3 text-center w-32 text-gray-600">คะแนน</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100 bg-white">
+                `;
+                
+                if(students.length === 0) html += `<tr><td colspan="3" class="text-center py-6 text-gray-400">ไม่มีรายชื่อนักเรียน</td></tr>`;
+
+                students.forEach(s => {
+                    const score = scores[s.id] !== undefined ? scores[s.id] : '-';
+                    const scoreStyle = score === '-' ? 'text-gray-400' : 'font-bold text-gray-800 text-base';
+                    html += `
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 text-center text-gray-500">${s.no}</td>
+                            <td class="px-4 py-3 text-gray-700">${s.name}</td>
+                            <td class="px-4 py-3 text-center ${scoreStyle}">${score}</td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table></div>`;
+                container.innerHTML = html;
+            },
+
+            // Admin: Render Scores Table for Edit
+            renderAdminClassScores: async (examId, classId, className, maxScore) => {
+                const container = document.getElementById('scoreManagementContent');
+                container.innerHTML = `<div class="text-center py-5"><i class="ph ph-spinner animate-spin text-xl text-primary"></i></div>`;
+
+                const [studentsObj, scoresObj] = await Promise.all([
+                    app.api.get(`students/${classId}`),
+                    app.api.get(`scores/${examId}/${classId}`)
+                ]);
+
+                const students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
+                const metadata = scoresObj?._metadata || { grader: '', examKey: '' };
+                const scores = scoresObj || {};
+                
+                // Calculate Summary
+                let validScores = [];
+                let absent = 0;
+                students.forEach(s => {
+                    if(scores[s.id] !== undefined && scores[s.id] !== '' && scores[s.id] !== null) {
+                        validScores.push(parseFloat(scores[s.id]));
+                    } else { absent++; }
+                });
+                const max = validScores.length ? Math.max(...validScores) : 0;
+                const min = validScores.length ? Math.min(...validScores) : 0;
+                const avg = validScores.length ? Math.round(validScores.reduce((a,b)=>a+b,0)/validScores.length) : 0;
+
+                // Build HTML
+                let html = `
+                    <!-- Summary & Controls -->
+                    <div class="bg-gray-50 p-4 rounded-lg mb-4 border border-gray-200">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center mb-4">
+                            <div class="bg-white p-2 rounded shadow-sm border border-gray-100">
+                                <div class="text-xs text-gray-500">สูงสุด</div><div class="text-lg font-bold text-green-500">${max}</div>
+                            </div>
+                            <div class="bg-white p-2 rounded shadow-sm border border-gray-100">
+                                <div class="text-xs text-gray-500">ต่ำสุด</div><div class="text-lg font-bold text-red-500">${min}</div>
+                            </div>
+                            <div class="bg-white p-2 rounded shadow-sm border border-gray-100">
+                                <div class="text-xs text-gray-500">เฉลี่ย</div><div class="text-lg font-bold text-blue-500">${avg}</div>
+                            </div>
+                            <div class="bg-white p-2 rounded shadow-sm border border-gray-100">
+                                <div class="text-xs text-gray-500">ขาดสอบ (ไม่มีคะแนน)</div><div class="text-lg font-bold text-gray-600">${absent} คน</div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-t border-gray-200 pt-3">
+                            <div class="flex items-center space-x-2 text-sm font-medium">
+                                <span class="text-gray-600">รหัสคีย์:</span>
+                                ${['ว่าง','A','B','C','D','E'].map(k => `
+                                    <label class="inline-flex items-center cursor-pointer">
+                                        <input type="radio" name="examKey" value="${k}" ${metadata.examKey === k || (k==='ว่าง' && !metadata.examKey) ? 'checked' : ''} 
+                                               onchange="app.actions.autoSaveKey('${examId}', '${classId}', this.value)"
+                                               class="text-primary focus:ring-primary h-4 w-4">
+                                        <span class="ml-1 text-gray-700">${k}</span>
+                                    </label>
+                                `).join('')}
+                            </div>
+                            
+                            <div class="flex space-x-2">
+                                <button onclick="app.ui.toggleEditScores()" class="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-50 shadow-sm font-medium" id="btnEditScore">
+                                    <i class="ph ph-pencil-simple mr-1"></i> แก้ไขคะแนน
+                                </button>
+                                <button onclick="app.actions.deleteClassScores('${examId}', '${classId}', '${className}')" class="bg-red-50 text-red-600 px-3 py-1.5 rounded text-sm hover:bg-red-100 border border-red-200 font-medium">
+                                    <i class="ph ph-trash mr-1"></i> ลบคะแนน
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Scores Table -->
+                    <form id="formEditScores" onsubmit="event.preventDefault(); app.actions.saveScores('${examId}', '${classId}', '${className}', ${maxScore});" class="relative">
+                        <div class="table-container overflow-x-auto border border-gray-200 rounded-lg">
+                            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                                <thead class="bg-gray-100">
+                                    <tr>
+                                        <th class="px-4 py-3 text-center text-gray-600 w-16">เลขที่</th>
+                                        <th class="px-4 py-3 text-left text-gray-600">ชื่อ-สกุล</th>
+                                        <th class="px-4 py-3 text-center text-gray-600 w-32">คะแนน (เต็ม ${maxScore})</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-200" id="studentListTbody">
+                `;
+
+                students.forEach(s => {
+                    const score = scores[s.id] !== undefined ? scores[s.id] : '';
+                    html += `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-4 py-2 text-center text-gray-500">${s.no}</td>
+                            <td class="px-4 py-2 text-gray-700 font-medium">${s.name}</td>
+                            <td class="px-4 py-2 text-center score-display-cell font-bold text-lg text-gray-800">${score || '-'}</td>
+                            <td class="px-4 py-2 text-center score-input-cell hidden">
+                                <input type="number" name="score_${s.id}" value="${score}" max="${maxScore}" min="0" step="0.5"
+                                       class="w-full text-center border border-gray-300 rounded px-2 py-1 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary">
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Edit Controls (Hidden initially) -->
+                        <div id="editControls" class="hidden mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div class="flex items-center w-full md:w-auto">
+                                <label class="text-sm font-medium text-gray-700 mr-2 whitespace-nowrap">ผู้ตรวจ <span class="text-red-500">*</span>:</label>
+                                <input type="text" id="graderName" value="${metadata.grader}" required placeholder="ชื่อผู้ตรวจ" class="w-full border border-gray-300 rounded px-3 py-1.5 focus:outline-none focus:border-primary bg-white">
+                            </div>
+                            <div class="flex space-x-2 w-full md:w-auto justify-end">
+                                <button type="button" onclick="app.ui.renderAdminClassScores('${examId}', '${classId}', '${className}', ${maxScore})" class="px-4 py-1.5 border border-gray-300 text-gray-600 rounded hover:bg-gray-100 bg-white text-sm">ยกเลิก</button>
+                                <button type="submit" class="px-4 py-1.5 bg-primary text-white rounded hover:bg-primary-dark shadow-sm font-medium text-sm">บันทึกข้อมูล</button>
+                            </div>
+                        </div>
+                    </form>
+                `;
+                container.innerHTML = html;
+            },
+
+            toggleEditScores: () => {
+                document.querySelectorAll('.score-display-cell').forEach(el => el.classList.add('hidden'));
+                document.querySelectorAll('.score-input-cell').forEach(el => el.classList.remove('hidden'));
+                document.getElementById('editControls').classList.remove('hidden');
+                document.getElementById('btnEditScore').classList.add('hidden');
+            },
+
+            // Bulk Student Edit/Delete UI Toggles
+            toggleStudentEditMode: () => {
+                document.getElementById('std-normal-actions').classList.add('hidden');
+                document.getElementById('std-edit-actions').classList.remove('hidden');
+                document.querySelectorAll('.std-view').forEach(el => el.classList.add('hidden'));
+                document.querySelectorAll('.std-edit').forEach(el => el.classList.remove('hidden'));
+            },
+            toggleStudentDeleteMode: () => {
+                document.getElementById('std-normal-actions').classList.add('hidden');
+                document.getElementById('std-delete-actions').classList.remove('hidden');
+                document.querySelectorAll('.std-delete-col').forEach(el => el.classList.remove('hidden'));
+            },
+            toggleAllStudentCheckboxes: (source) => {
+                const checkboxes = document.querySelectorAll('.std-del-checkbox');
+                checkboxes.forEach(cb => cb.checked = source.checked);
+            },
+            
+            // History Bulk Delete UI Toggles
+            toggleHistoryDeleteMode: () => {
+                document.getElementById('hist-normal-actions').classList.add('hidden');
+                document.getElementById('hist-delete-actions').classList.remove('hidden');
+                document.querySelectorAll('.hist-delete-col').forEach(el => el.classList.remove('hidden'));
+            },
+            toggleAllHistoryCheckboxes: (source) => {
+                const checkboxes = document.querySelectorAll('.hist-del-checkbox');
+                checkboxes.forEach(cb => cb.checked = source.checked);
+            }
+        };
+
+        app.ui.initSearchableTeacherDropdown = (teachers, containerId, hiddenInputId, initialId = '', initialName = '') => {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            // สร้างโครงสร้าง HTML สำหรับกล่องค้นหา
+            container.innerHTML = `
+                <div class="relative w-full">
+                    <div class="relative">
+                        <input type="text" id="${containerId}-search" value="${initialName}" placeholder="พิมพ์ค้นหาชื่อครูผู้สอน..." 
+                               class="w-full border border-gray-300 rounded-lg pl-3 pr-10 py-2 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-sm bg-white cursor-pointer"
+                               onfocus="app.ui.showTeacherList('${containerId}')" 
+                               oninput="app.ui.filterTeacherList('${containerId}', this.value)" 
+                               autocomplete="off">
+                        <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-gray-400">
+                            <i class="ph ph-caret-down"></i>
+                        </div>
+                    </div>
+                    <input type="hidden" id="${hiddenInputId}" value="${initialId}" required>
+                    <div id="${containerId}-list" class="hidden absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50 divide-y divide-gray-100">
+                        <!-- รายการแนะนำจะถูกเพิ่มจาก JS -->
+                    </div>
+                </div>
+            `;
+
+            // บันทึกข้อมูลตั้งต้นลง Dataset ของตู้ Container เพื่อใช้เปรียบเทียบภายหลัง
+            container.dataset.teachers = JSON.stringify(teachers);
+
+            // แสดงรายการแนะนำตามข้อมูลที่มี
+            app.ui.renderTeacherListItems(containerId, hiddenInputId, teachers);
+
+            // เมื่อคลิกพื้นที่อื่นนอกกล่อง ให้ปิดรายการ dropdown อัตโนมัติ (เพิ่มระบบป้องกัน Element ถูกทำลาย)
+            const closeDropdown = (e) => {
+                if (!container || !container.isConnected) {
+                    document.removeEventListener('click', closeDropdown);
+                    return;
+                }
+                if (!container.contains(e.target)) {
+                    const list = document.getElementById(`${containerId}-list`);
+                    if (list) list.classList.add('hidden');
+                    
+                    const searchInput = document.getElementById(`${containerId}-search`);
+                    const hiddenInput = document.getElementById(hiddenInputId);
+                    if (searchInput && hiddenInput) {
+                        const currentTeachers = JSON.parse(container.dataset.teachers || '[]');
+                        const selectedTeacher = currentTeachers.find(t => t.id === hiddenInput.value);
+                        if (selectedTeacher) {
+                            searchInput.value = selectedTeacher.name;
+                        } else {
+                            searchInput.value = '';
+                            hiddenInput.value = '';
+                        }
+                    }
+                }
+            };
+            if (container._clickOutsideHandler) {
+                document.removeEventListener('click', container._clickOutsideHandler);
+            }
+            container._clickOutsideHandler = closeDropdown;
+            document.addEventListener('click', closeDropdown);
+        };
+
+        app.ui.renderTeacherListItems = (containerId, hiddenInputId, filteredTeachers) => {
+            const listContainer = document.getElementById(`${containerId}-list`);
+            if (!listContainer) return;
+
+            if (filteredTeachers.length === 0) {
+                listContainer.innerHTML = `<div class="p-3 text-xs text-gray-500 text-center">ไม่พบชื่อครูผู้สอนในระบบ</div>`;
+                return;
+            }
+
+            listContainer.innerHTML = filteredTeachers.map(t => `
+                <div onclick="app.ui.selectTeacherOption('${containerId}', '${hiddenInputId}', '${t.id}', '${t.name.replace(/'/g, "\\'")}')" 
+                     class="px-4 py-2 hover:bg-red-50 hover:text-primary cursor-pointer transition text-sm text-gray-700 font-medium">
+                    ${t.name}
+                </div>
+            `).join('');
+        };
+
+        app.ui.showTeacherList = (containerId) => {
+            const list = document.getElementById(`${containerId}-list`);
+            if (list) list.classList.remove('hidden');
+        };
+
+        app.ui.filterTeacherList = (containerId, query) => {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const teachers = JSON.parse(container.dataset.teachers || '[]');
+            
+            const filtered = teachers.filter(t => t.name.toLowerCase().includes(query.toLowerCase()));
+            const hiddenInputId = containerId === 'ce-teacher-container' ? 'ce-teacher' : 'ee-teacher';
+            
+            app.ui.renderTeacherListItems(containerId, hiddenInputId, filtered);
+            app.ui.showTeacherList(containerId);
+        };
+
+        app.ui.selectTeacherOption = (containerId, hiddenInputId, id, name) => {
+            const searchInput = document.getElementById(`${containerId}-search`);
+            const hiddenInput = document.getElementById(hiddenInputId);
+            const list = document.getElementById(`${containerId}-list`);
+
+            if (searchInput && hiddenInput) {
+                searchInput.value = name;
+                hiddenInput.value = id;
+            }
+            if (list) list.classList.add('hidden');
+        };
+
+        // ==========================================
+        // DATA ACTIONS (CRUD to Firebase)
+        // ==========================================
+        app.actions = {
+            // -- Scores --
+            saveScores: async (examId, classId, className, maxScore) => {
+                const form = document.getElementById('formEditScores');
+                const formData = new FormData(form);
+                const grader = document.getElementById('graderName').value.trim();
+                
+                if(!grader) return app.toast.fire({ icon: 'warning', title: 'กรุณากรอกชื่อผู้ตรวจ' });
+
+                app.showLoading();
+                
+                // Get existing metadata for examKey preservation
+                const existingScores = await app.api.get(`scores/${examId}/${classId}`) || {};
+                const currentKey = existingScores._metadata?.examKey || 'ว่าง';
+
+                let scoreData = {
+                    _metadata: { grader, timestamp: Date.now(), examKey: currentKey }
+                };
+
+                for(let [key, value] of formData.entries()) {
+                    if(key.startsWith('score_')) {
+                        const sId = key.replace('score_', '');
+                        if(value !== '') {
+                            let num = parseFloat(value);
+                            if(num > maxScore) num = maxScore;
+                            scoreData[sId] = num;
+                        }
+                    }
+                }
+
+                const success = await app.api.set(`scores/${examId}/${classId}`, scoreData);
+                if(success) {
+                    await app.api.logAction('บันทึกคะแนน', `บันทึกคะแนนห้อง ${className} จำนวน ${Object.keys(scoreData).length - 1} คน ผู้ตรวจ: ${grader}`);
+                    app.toast.fire({ icon: 'success', title: 'บันทึกคะแนนสำเร็จ' });
+                    app.ui.renderAdminClassScores(examId, classId, className, maxScore);
+                }
+                app.hideLoading();
+            },
+            
+            autoSaveKey: async (examId, classId, key) => {
+                const path = `scores/${examId}/${classId}/_metadata/examKey`;
+                await app.api.set(path, key);
+                app.toast.fire({ icon: 'success', title: `ตั้งค่ารหัสคีย์เป็น ${key}` });
+            },
+
+            deleteClassScores: (examId, classId, className) => {
+                Swal.fire({
+                    title: 'ยืนยันการลบคะแนน?',
+                    text: `ต้องการลบคะแนนของห้อง ${className} ทั้งหมดใช่หรือไม่?`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: 'ใช่, ลบเลย',
+                    cancelButtonText: 'ยกเลิก'
+                }).then(async (result) => {
+                    if (result.isConfirmed) {
+                        app.showLoading();
+                        const [existingScores, exam] = await Promise.all([
+                            app.api.get(`scores/${examId}/${classId}`),
+                            app.api.get(`exams/${examId}`)
+                        ]);
+                        
+                        await app.api.remove(`scores/${examId}/${classId}`);
+                        
+                        await app.api.logAction('ลบคะแนน', `ลบคะแนนห้อง ${className} วิชา ${exam ? exam.subject : ''} ทั้งหมด`, "", {
+                            deletedScores: existingScores || {},
+                            className: className,
+                            subject: exam ? exam.subject : '',
+                            classId: classId
+                        });
+                        
+                        app.hideLoading();
+                        app.toast.fire({ icon: 'success', title: 'ลบข้อมูลสำเร็จ' });
+                        const refreshedExam = await app.api.get(`exams/${examId}`);
+                        app.ui.renderAdminClassScores(examId, classId, className, refreshedExam.numQuestions);
+                    }
+                });
+            },
+
+            // -- Students (Bulk Actions) --
+            saveBulkEditStudents: async (classId, className) => {
+                const updates = {};
+                let hasError = false;
+
+                document.querySelectorAll('.std-row').forEach(tr => {
+                    const id = tr.dataset.id;
+                    const inputs = tr.querySelectorAll('.std-edit');
+                    const no = inputs[0].value.trim();
+                    const code = inputs[1].value.trim();
+                    const name = inputs[2].value.trim();
+                    
+                    if(!no || !name) hasError = true;
+                    else {
+                        updates[`students/${classId}/${id}/no`] = parseInt(no);
+                        updates[`students/${classId}/${id}/studentCode`] = code;
+                        updates[`students/${classId}/${id}/name`] = name;
+                    }
+                });
+
+                if(hasError) return app.toast.fire({ icon: 'warning', title: 'กรุณากรอกเลขที่และชื่อให้ครบถ้วน' });
+                
+                app.showLoading();
+                await app.api.update(updates);
+                app.hideLoading();
+                app.toast.fire({ icon: 'success', title: 'บันทึกการแก้ไขสำเร็จ' });
+                app.renderView(); 
+            },
+            
+            bulkDeleteStudents: (classId, className) => {
+                const checked = document.querySelectorAll('.std-del-checkbox:checked');
+                if(checked.length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกรายการที่ต้องการลบ' });
+
+                Swal.fire({
+                    title: 'ยืนยันการลบ?',
+                    text: `ต้องการลบนักเรียนที่เลือกจำนวน ${checked.length} คน ใช่หรือไม่?`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: 'ยืนยันการลบ',
+                    cancelButtonText: 'ยกเลิก'
+                }).then(async (result) => {
+                    if (result.isConfirmed) {
+                        app.showLoading();
+                        const updates = {};
+                        checked.forEach(cb => { updates[`students/${classId}/${cb.value}`] = null; });
+                        await app.api.update(updates);
+                        app.hideLoading();
+                        app.toast.fire({ icon: 'success', title: `ลบนักเรียน ${checked.length} คนสำเร็จ` });
+                        app.renderView();
+                    }
+                });
+            },
+
+            // -- History (Bulk Actions) --
+            bulkDeleteHistory: () => {
+                const checked = document.querySelectorAll('.hist-del-checkbox:checked');
+                if(checked.length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกประวัติที่ต้องการลบ' });
+
+                Swal.fire({
+                    title: 'ยืนยันการลบประวัติ?',
+                    text: `ต้องการลบประวัติการใช้งานที่เลือกจำนวน ${checked.length} รายการ ใช่หรือไม่? (ไม่สามารถกู้คืนได้)`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: 'ยืนยันการลบ',
+                    cancelButtonText: 'ยกเลิก'
+                }).then(async (result) => {
+                    if (result.isConfirmed) {
+                        app.showLoading();
+                        const updates = {};
+                        checked.forEach(cb => { updates[`history/${cb.value}`] = null; });
+                        await app.api.update(updates);
+                        app.hideLoading();
+                        app.toast.fire({ icon: 'success', title: `ลบประวัติ ${checked.length} รายการสำเร็จ` });
+                        app.loadAdminTab('admin-history');
+                    }
+                });
+            },
+
+            // -- Teachers --
+            deleteTeacher: (teacherId, name) => {
+                Swal.fire({ title: 'ลบครูผู้สอน?', text: `ต้องการลบครู ${name} ใช่หรือไม่?`, icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33' })
+                .then(async (result) => {
+                    if (result.isConfirmed) {
+                        await app.api.remove(`teachers/${teacherId}`);
+                        await app.api.logAction('ลบครู', `ลบครู ${name}`);
+                        app.state.cache.teachers = null;
+                        app.loadAdminTab('admin-teachers');
+                    }
+                });
+            },
+
+            // -- Classes --
+            deleteClass: (classId, name) => {
+                Swal.fire({ title: 'ลบชั้นเรียน?', text: `ต้องการลบชั้นเรียน ${name} รวมนักเรียนทั้งหมดใช่หรือไม่? (ไม่สามารถกู้คืนได้)`, icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33' })
+                .then(async (result) => {
+                    if (result.isConfirmed) {
+                        app.showLoading();
+                        await app.api.remove(`classes/${classId}`);
+                        await app.api.remove(`students/${classId}`);
+                        await app.api.logAction('ลบชั้นเรียน', `ลบห้อง ${name}`);
+                        app.state.cache.classes = null;
+                        app.hideLoading();
+                        app.loadAdminTab('admin-classes');
+                    }
+                });
+            },
+
+            // -- Exams --
+            deleteExam: async (examId, teacherId, teacherName) => {
+                Swal.fire({
+                    title: 'ยืนยันการลบวิชาสอบ?',
+                    text: 'ต้องการลบวิชาสอบนี้และข้อมูลคะแนนทั้งหมดในระบบใช่หรือไม่?',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: 'ยืนยันการลบ',
+                    cancelButtonText: 'ยกเลิก'
+                }).then(async (result) => {
+                    if (result.isConfirmed) {
+                        app.showLoading();
+                        
+                        const exam = await app.api.get(`exams/${examId}`);
+                        if(!exam) { app.hideLoading(); return; }
+
+                        const classIds = Object.keys(exam.classes || {});
+                        let scoresBackup = {};
+                        
+                        for (let cid of classIds) {
+                            const scoreData = await app.api.get(`scores/${examId}/${cid}`);
+                            if (scoreData) {
+                                scoresBackup[cid] = scoreData;
+                            }
+                        }
+
+                        const updates = {};
+                        updates[`exams/${examId}`] = null;
+                        for (let cid of classIds) {
+                            updates[`scores/${examId}/${cid}`] = null;
+                        }
+                        
+                        await app.api.update(updates);
+                        
+                        await app.api.logAction(
+                            'ลบวิชาสอบ', 
+                            `ลบวิชาสอบ ${exam.subject} ออกจากระบบ (ครูผู้สอน: ${teacherName})`, 
+                            "", 
+                            {
+                                deletedScores: scoresBackup,
+                                className: classIds.map(cid => exam.classes[cid]).join(', '),
+                                subject: exam.subject,
+                                classId: classIds.join(',') 
+                            }
+                        );
+
+                        app.hideLoading();
+                        app.toast.fire({ icon: 'success', title: 'ลบวิชาสอบเรียบร้อยแล้ว' });
+                        app.renderView(); 
+                    }
+                });
+            },
+
+            // -- Smart Excel Import Engine --
+            importFromExcel: async (file) => {
+                app.showLoading();
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        const rows = XLSX.utils.sheet_to_json(worksheet);
+
+                        if (rows.length === 0) {
+                            app.hideLoading();
+                            return Swal.fire({ icon: 'warning', title: 'ไฟล์ว่างเปล่า', text: 'กรุณาตรวจสอบว่าไฟล์มีข้อมูลอยู่จริง', confirmButtonColor: '#F52746' });
+                        }
+
+                        // วิเคราะห์และตรวจจับชื่อหัวตาราง
+                        const firstRow = rows[0];
+                        const headers = Object.keys(firstRow);
+                        
+                        let keyNo = null, keyCode = null, keyName = null, keyClass = null;
+
+                        headers.forEach(h => {
+                            const hl = h.toLowerCase().trim();
+                            if (hl.includes('เลขที่') || hl === 'no' || hl === 'number') keyNo = h;
+                            else if (hl.includes('รหัส') || hl.includes('code') || hl.includes('id')) keyCode = h;
+                            else if (hl.includes('ชื่อ') || hl.includes('สกุล') || hl.includes('name') || hl.includes('นักเรียน')) keyName = h;
+                            else if (hl.includes('ระดับชั้น') || hl.includes('ชั้น') || hl === 'class' || hl === 'grade') keyClass = h;
+                        });
+
+                        if (!keyClass || !keyName) {
+                            app.hideLoading();
+                            return Swal.fire({
+                                icon: 'error',
+                                title: 'โครงสร้างไฟล์ไม่ถูกต้อง',
+                                text: 'จำเป็นต้องมีคอลัมน์ชื่อ "ระดับชั้น" (เพื่อแบ่งห้อง) และ "ชื่อสกุล/ชื่อ"',
+                                confirmButtonColor: '#F52746'
+                            });
+                        }
+
+                        // ดึงข้อมูลคลาสปัจจุบันเพื่อนำมาเปรียบเทียบ
+                        const existingClasses = await app.api.get('classes') || {};
+                        const classLookup = {}; // Map: className -> classId
+                        Object.entries(existingClasses).forEach(([cid, c]) => {
+                            classLookup[c.name.trim()] = cid;
+                        });
+
+                        const updates = {};
+                        let createdClassesCount = 0;
+                        let importedStudentsCount = 0;
+
+                        // วนลูปประมวลผลข้อมูลแถวต่อแถว
+                        for (let row of rows) {
+                            const rawClassName = String(row[keyClass] || '').trim();
+                            const studentName = String(row[keyName] || '').trim();
+                            const no = parseInt(row[keyNo]) || 0;
+                            const studentCode = String(row[keyCode] || '').trim();
+
+                            if (!rawClassName || !studentName) continue;
+
+                            // จัดการตรวจสอบคลาสเรียน
+                            let classId = classLookup[rawClassName];
+                            if (!classId) {
+                                // หากไม่มีคลาส ให้สร้างใหม่ทันที (แยก ระดับชั้น และ ห้องเรียน)
+                                let level = 'ม.1';
+                                let room = '1';
+
+                                if (rawClassName.includes('/')) {
+                                    const parts = rawClassName.split('/');
+                                    level = parts[0].trim();
+                                    room = parts[1].trim();
+                                } else {
+                                    // Fallback กรณีไม่มี "/"
+                                    level = rawClassName.substring(0, 3);
+                                    room = rawClassName.substring(3).trim() || '1';
+                                }
+
+                                // สร้าง ID และกำหนดค่าการเขียนลง RTDB
+                                const newClassRef = push(ref(db, 'classes'));
+                                classId = newClassRef.key;
+                                
+                                updates[`classes/${classId}`] = {
+                                    level: level,
+                                    room: room,
+                                    name: rawClassName
+                                };
+
+                                // เพิ่มลง Lookup ทันทีเพื่อความรวดเร็วในการรันแถวถัดไป
+                                classLookup[rawClassName] = classId;
+                                createdClassesCount++;
+                            }
+
+                            // สร้าง ID สำหรับตัวนักเรียนและบันทึกข้อมูล
+                            const newStudentRef = push(ref(db, `students/${classId}`));
+                            const studentId = newStudentRef.key;
+
+                            updates[`students/${classId}/${studentId}`] = {
+                                no: no,
+                                studentCode: studentCode,
+                                name: studentName
+                            };
+                            importedStudentsCount++;
+                        }
+
+                        // บันทึกแบบ Batch ไปยัง Firebase
+                        if (Object.keys(updates).length > 0) {
+                            await app.api.update(updates);
+                            await app.api.logAction(
+                                'นำเข้า Excel', 
+                                `นำเข้ารายการจาก Excel: สร้างชั้นเรียนใหม่ ${createdClassesCount} ห้อง, นำเข้านักเรียน ${importedStudentsCount} คน`
+                            );
+
+                            app.state.cache.classes = null; // ล้างแคชห้องเรียน
+                            app.hideLoading();
+                            app.modals.close();
+                            app.loadAdminTab('admin-classes');
+
+                            Swal.fire({
+                                icon: 'success',
+                                title: 'นำเข้าข้อมูลสำเร็จ!',
+                                html: `สร้างชั้นเรียนใหม่: <b>${createdClassesCount} ห้อง</b><br>นำเข้านักเรียนสำเร็จ: <b>${importedStudentsCount} คน</b>`,
+                                confirmButtonColor: '#F52746'
+                            });
+                        } else {
+                            app.hideLoading();
+                            Swal.fire({ icon: 'info', title: 'ไม่มีข้อมูลที่ต้องนำเข้า', confirmButtonColor: '#F52746' });
+                        }
+
+                    } catch (err) {
+                        console.error(err);
+                        app.hideLoading();
+                        Swal.fire({ icon: 'error', title: 'เกิดข้อผิดพลาด', text: 'ไม่สามารถอ่านไฟล์หรือเขียนข้อมูลลงระบบได้', confirmButtonColor: '#F52746' });
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        };
+
+        // ==========================================
+        // MODALS (Forms)
+        // ==========================================
+        app.modals = {
+            close: () => { document.getElementById('modalContainer').innerHTML = ''; },
+            
+            // 1. Create Exam (Public/Admin)
+            openCreateExam: async () => {
+                const [tObj, cObj] = await Promise.all([app.api.get('teachers'), app.api.get('classes')]);
+                const teachers = tObj ? Object.entries(tObj).map(([id, t]) => ({id, ...t})) : [];
+                const classes = cObj ? Object.entries(cObj).map(([id, c]) => ({id, ...c})).sort((a,b) => a.name.localeCompare(b.name)) : [];
+
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-lg"><i class="ph ph-exam mr-2"></i>สร้างรายการสอบ</h3>
+                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form id="formCreateExam" class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitCreateExam();">
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ครูผู้ออกสอบ <span class="text-red-500">*</span></label>
+                                    <div class="flex gap-2 items-center">
+                                        <!-- Searchable Dropdown Container -->
+                                        <div id="ce-teacher-container" class="flex-1"></div>
+                                        <button type="button" onclick="document.getElementById('ce-new-teacher-div').classList.toggle('hidden')" class="bg-gray-100 border border-gray-300 px-3 rounded-lg text-sm hover:bg-gray-200 h-[38px]" title="เพิ่มครูใหม่">
+                                            <i class="ph ph-plus"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Inline Add Teacher -->
+                                <div id="ce-new-teacher-div" class="hidden bg-gray-50 p-3 rounded-lg border border-gray-200 flex gap-2 items-center">
+                                    <input type="text" id="ce-new-teacher-name" placeholder="ชื่อ-สกุล ครูท่านใหม่" class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
+                                    <button type="button" onclick="app.modals.addTeacherInline()" class="bg-green-500 text-white px-3 py-1.5 rounded text-sm hover:bg-green-600">เพิ่ม</button>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อรายวิชา <span class="text-red-500">*</span></label>
+                                    <input type="text" id="ce-subject" required placeholder="เช่น คณิตศาสตร์ ม.1" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">ระดับชั้นที่สอบ (เลือกได้มากกว่า 1) <span class="text-red-500">*</span></label>
+                                    <div class="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50 grid grid-cols-2 gap-2">
+                                        ${classes.length > 0 ? classes.map(c => `
+                                            <label class="inline-flex items-center">
+                                                <input type="checkbox" name="ce-classes" value="${c.id}" data-name="${c.name}" class="text-primary rounded focus:ring-primary w-4 h-4 mr-2">
+                                                <span class="text-sm text-gray-700">${c.name}</span>
+                                            </label>
+                                        `).join('') : '<span class="text-xs text-gray-500">ไม่มีข้อมูลชั้นเรียน (ต้องให้แอดมินเพิ่ม)</span>'}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">จำนวนข้อสอบ <span class="text-red-500">*</span></label>
+                                    <input type="number" id="ce-num" required min="1" max="200" placeholder="ระบุตัวเลข" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
+                                </div>
+
+                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark text-sm font-medium shadow-sm">เพิ่มรายการ</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+
+                // เรียกฟังก์ชันสำหรับจัดการ dropdown ค้นหาชื่อครู
+                app.ui.initSearchableTeacherDropdown(teachers, 'ce-teacher-container', 'ce-teacher');
+            },
+
+            addTeacherInline: async () => {
+                const name = document.getElementById('ce-new-teacher-name').value.trim();
+                if(!name) return;
+                app.showLoading();
+                const newId = await app.api.push('teachers', { name });
+                app.state.cache.teachers = null;
+                app.hideLoading();
+                
+                // คืนค่าอัปเดต searchable dropdown ให้รู้จักครูใหม่ทันที
+                const container = document.getElementById('ce-teacher-container');
+                if (container) {
+                    const teachers = JSON.parse(container.dataset.teachers || '[]');
+                    teachers.push({ id: newId, name: name });
+                    container.dataset.teachers = JSON.stringify(teachers);
+                    
+                    app.ui.renderTeacherListItems('ce-teacher-container', 'ce-teacher', teachers);
+                    app.ui.selectTeacherOption('ce-teacher-container', 'ce-teacher', newId, name);
+                }
+                
+                document.getElementById('ce-new-teacher-name').value = '';
+                document.getElementById('ce-new-teacher-div').classList.add('hidden');
+                app.toast.fire({icon: 'success', title: 'เพิ่มครูสำเร็จ'});
+            },
+
+            submitCreateExam: async () => {
+                const teacherId = document.getElementById('ce-teacher').value;
+                const subject = document.getElementById('ce-subject').value.trim();
+                const numQuestions = parseInt(document.getElementById('ce-num').value);
+                
+                const classCheckboxes = document.querySelectorAll('input[name="ce-classes"]:checked');
+                const selectedClasses = {};
+                classCheckboxes.forEach(cb => { selectedClasses[cb.value] = cb.dataset.name; });
+
+                if(!teacherId || !subject || isNaN(numQuestions)) return;
+                if(Object.keys(selectedClasses).length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกอย่างน้อย 1 ชั้นเรียน' });
+
+                app.showLoading();
+                const data = {
+                    teacherId,
+                    subject,
+                    numQuestions,
+                    classes: selectedClasses,
+                    timestamp: Date.now()
+                };
+                
+                await app.api.push('exams', data);
+                await app.api.logAction('สร้างรายการสอบ', `วิชา ${subject} จำนวน ${numQuestions} ข้อ`);
+                
+                app.hideLoading();
+                app.modals.close();
+                app.toast.fire({ icon: 'success', title: 'สร้างรายการสอบสำเร็จ' });
+                
+                if(app.state.currentView === 'admin-dashboard') app.loadAdminTab('admin-exams');
+                else if (app.state.currentView === 'admin-teacher-exams') app.renderView();
+                else app.renderView(); 
+            },
+
+            // 1.4 Edit Exam (Admin Only)
+            openEditExam: async (examId) => {
+                app.showLoading();
+                const [exam, tObj, cObj] = await Promise.all([
+                    app.api.get(`exams/${examId}`),
+                    app.api.get('teachers'),
+                    app.api.get('classes')
+                ]);
+                app.hideLoading();
+
+                if(!exam) return;
+
+                const teachers = tObj ? Object.entries(tObj).map(([id, t]) => ({id, ...t})) : [];
+                const classes = cObj ? Object.entries(cObj).map(([id, c]) => ({id, ...c})).sort((a,b) => a.name.localeCompare(b.name)) : [];
+
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-lg"><i class="ph ph-pencil-simple mr-2"></i>แก้ไขรายการสอบ</h3>
+                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form id="formEditExam" class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditExam('${examId}');">
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ครูผู้ออกสอบ <span class="text-red-500">*</span></label>
+                                    <!-- Searchable Dropdown Container -->
+                                    <div id="ee-teacher-container" class="w-full"></div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อรายวิชา <span class="text-red-500">*</span></label>
+                                    <input type="text" id="ee-subject" required value="${exam.subject}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">ระดับชั้นที่สอบ (เลือกได้มากกว่า 1) <span class="text-red-500">*</span></label>
+                                    <div class="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50 grid grid-cols-2 gap-2">
+                                        ${classes.map(c => {
+                                            const isChecked = exam.classes && exam.classes[c.id];
+                                            return `
+                                                <label class="inline-flex items-center">
+                                                    <input type="checkbox" name="ee-classes" value="${c.id}" data-name="${c.name}" ${isChecked ? 'checked' : ''} class="text-primary rounded focus:ring-primary w-4 h-4 mr-2">
+                                                    <span class="text-sm text-gray-700">${c.name}</span>
+                                                </label>
+                                            `;
+                                        }).join('')}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">จำนวนข้อสอบ <span class="text-red-500">*</span></label>
+                                    <input type="number" id="ee-num" required min="1" max="200" value="${exam.numQuestions}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
+                                </div>
+
+                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark text-sm font-medium shadow-sm">บันทึกการแก้ไข</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+
+                // ดึงรายชื่อครูที่ถูกเลือกมาแสดงเป็นค่าเริ่มต้น
+                const selectedTeacher = teachers.find(t => t.id === exam.teacherId);
+                const initialTeacherName = selectedTeacher ? selectedTeacher.name : '';
+                app.ui.initSearchableTeacherDropdown(teachers, 'ee-teacher-container', 'ee-teacher', exam.teacherId, initialTeacherName);
+            },
+
+            submitEditExam: async (examId) => {
+                const teacherId = document.getElementById('ee-teacher').value;
+                const subject = document.getElementById('ee-subject').value.trim();
+                const numQuestions = parseInt(document.getElementById('ee-num').value);
+                
+                const classCheckboxes = document.querySelectorAll('input[name="ee-classes"]:checked');
+                const selectedClasses = {};
+                classCheckboxes.forEach(cb => { selectedClasses[cb.value] = cb.dataset.name; });
+
+                if(!teacherId || !subject || isNaN(numQuestions)) return;
+                if(Object.keys(selectedClasses).length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกอย่างน้อย 1 ชั้นเรียน' });
+
+                app.showLoading();
+                
+                const updates = {};
+                updates[`exams/${examId}/teacherId`] = teacherId;
+                updates[`exams/${examId}/subject`] = subject;
+                updates[`exams/${examId}/numQuestions`] = numQuestions;
+                updates[`exams/${examId}/classes`] = selectedClasses;
+
+                await app.api.update(updates);
+                await app.api.logAction('แก้ไขวิชาสอบ', `แก้ไขข้อมูลวิชาสอบ ${subject} (${numQuestions} ข้อ)`);
+                
+                app.hideLoading();
+                app.modals.close();
+                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลสำเร็จ' });
+                
+                if (app.state.currentView === 'admin-teacher-exams') {
+                    const teacher = await app.api.get(`teachers/${teacherId}`);
+                    app.state.tempData.teacherName = teacher ? teacher.name : '';
+                    app.renderView();
+                } else {
+                    app.loadAdminTab('admin-exams');
+                }
+            },
+
+            // 2. Add Class
+            openAddClass: () => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-gray-800">เพิ่มชั้นเรียน</h3>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddClass();">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
+                                    <select id="ac-level" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary bg-white text-sm">
+                                        <option value="ม.1">ม.1</option><option value="ม.2">ม.2</option><option value="ม.3">ม.3</option>
+                                        <option value="ม.4">ม.4</option><option value="ม.5">ม.5</option><option value="ม.6">ม.6</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ห้องเรียน</label>
+                                    <input type="text" id="ac-room" required placeholder="เช่น 2 หรือ วิทย์-คณิต" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary text-sm bg-white">
+                                </div>
+                                <div class="flex justify-end space-x-2 pt-2">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium shadow-sm text-sm">ตกลง</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+            submitAddClass: async () => {
+                const level = document.getElementById('ac-level').value;
+                const room = document.getElementById('ac-room').value.trim();
+                const name = `${level}/${room}`;
+                
+                app.showLoading();
+                await app.api.push('classes', { level, room, name });
+                await app.api.logAction('เพิ่มชั้นเรียน', `สร้างชั้นเรียน ${name}`);
+                app.state.cache.classes = null;
+                app.hideLoading();
+                app.modals.close();
+                app.loadAdminTab('admin-classes');
+                app.toast.fire({ icon: 'success', title: `เพิ่ม ${name} สำเร็จ` });
+            },
+
+            // Edit Class (Admin panel)
+            openEditClass: (classId, level, room, oldName) => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-gray-800">แก้ไขชั้นเรียน</h3>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditClass('${classId}', '${oldName}');">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
+                                    <select id="ec-level" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary bg-white text-sm">
+                                        ${['ม.1','ม.2','ม.3','ม.4','ม.5','ม.6'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ห้องเรียน</label>
+                                    <input type="text" id="ec-room" required value="${room}" placeholder="เช่น 2 หรือ วิทย์-คณิต" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary text-sm bg-white">
+                                </div>
+                                <div class="flex justify-end space-x-2 pt-2">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium shadow-sm text-sm">บันทึก</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+            submitEditClass: async (classId, oldName) => {
+                const level = document.getElementById('ec-level').value;
+                const room = document.getElementById('ec-room').value.trim();
+                const newName = `${level}/${room}`;
+                
+                app.showLoading();
+                
+                const updates = {};
+                updates[`classes/${classId}/level`] = level;
+                updates[`classes/${classId}/room`] = room;
+                updates[`classes/${classId}/name`] = newName;
+                
+                if (oldName !== newName) {
+                    const allExams = await app.api.get('exams');
+                    if (allExams) {
+                        Object.entries(allExams).forEach(([eId, e]) => {
+                            if (e.classes && e.classes[classId]) {
+                                updates[`exams/${eId}/classes/${classId}`] = newName;
+                            }
+                        });
+                    }
+                }
+                
+                await app.api.update(updates);
+                if (oldName !== newName) {
+                    await app.api.logAction('แก้ไขชั้นเรียน', `เปลี่ยน ${oldName} เป็น ${newName}`);
+                }
+                
+                app.state.cache.classes = null;
+                app.hideLoading();
+                app.modals.close();
+                app.loadAdminTab('admin-classes');
+                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลชั้นเรียนสำเร็จ' });
+            },
+
+            // 3. Add Student
+            openAddStudent: (classId, className) => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-gray-800">เพิ่มนักเรียน</h3>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddStudent('${classId}', '${className}');">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">เลขที่</label>
+                                    <input type="number" id="as-no" required min="1" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">รหัสนักเรียน</label>
+                                    <input type="text" id="as-code" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
+                                    <input type="text" id="as-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+                                </div>
+                                <div class="flex justify-end space-x-2 pt-2">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">เพิ่ม</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+            submitAddStudent: async (classId, className) => {
+                const no = parseInt(document.getElementById('as-no').value);
+                const studentCode = document.getElementById('as-code').value.trim();
+                const name = document.getElementById('as-name').value.trim();
+                
+                app.showLoading();
+                await app.api.push(`students/${classId}`, { no, studentCode, name });
+                app.hideLoading();
+                app.modals.close();
+                app.renderView(); 
+                app.toast.fire({ icon: 'success', title: 'เพิ่มนักเรียนสำเร็จ' });
+            },
+
+            // 4. Add Teacher (Admin panel)
+            openAddTeacher: () => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-gray-800">เพิ่มครูผู้สอน</h3>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddTeacher();">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
+                                    <input type="text" id="at-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+                                </div>
+                                <div class="flex justify-end space-x-2 pt-2">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">เพิ่ม</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+            submitAddTeacher: async () => {
+                const name = document.getElementById('at-name').value.trim();
+                app.showLoading();
+                await app.api.push('teachers', { name });
+                await app.api.logAction('เพิ่มครู', `เพิ่มครู ${name}`);
+                app.state.cache.teachers = null;
+                app.hideLoading();
+                app.modals.close();
+                app.loadAdminTab('admin-teachers');
+                app.toast.fire({ icon: 'success', title: 'เพิ่มครูสำเร็จ' });
+            },
+
+            // 5. Edit Teacher (Admin panel - Modal Overlay)
+            openEditTeacher: (id, name) => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-gray-800">แก้ไขชื่อครูผู้สอน</h3>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditTeacher('${id}');">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
+                                    <input type="text" id="et-name" required value="${name}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:border-primary focus:ring-1 focus:ring-primary text-sm bg-white">
+                                </div>
+                                <div class="flex justify-end space-x-2 pt-2">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
+                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">บันทึก</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+            submitEditTeacher: async (id) => {
+                const name = document.getElementById('et-name').value.trim();
+                if(!name) return;
+                app.showLoading();
+                await app.api.set(`teachers/${id}/name`, name);
+                await app.api.logAction('แก้ไขชื่อครู', `แก้ไขข้อมูลครูรหัส ${id} เป็น ${name}`);
+                app.state.cache.teachers = null; 
+                app.hideLoading();
+                app.modals.close();
+                app.loadAdminTab('admin-teachers');
+                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลสำเร็จ' });
+            },
+
+            // 6. View Deleted Scores (History)
+            openDeletedScores: async (historyId) => {
+                app.showLoading();
+                const historyItem = await app.api.get(`history/${historyId}`);
+                if(!historyItem || !historyItem.extraData || !historyItem.extraData.deletedScores) {
+                    app.hideLoading();
+                    return app.toast.fire({ icon: 'error', title: 'ไม่พบข้อมูลคะแนนสำรอง' });
+                }
+
+                const extra = historyItem.extraData;
+                const scoresMap = extra.deletedScores; 
+                
+                const cids = Object.keys(scoresMap);
+                
+                let html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden animate-[fadeIn_0.2s_ease-out] flex flex-col max-h-[90vh]">
+                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                                <div>
+                                    <h3 class="font-bold text-gray-800"><i class="ph ph-clock-counter-clockwise mr-1 text-primary"></i> ข้อมูลคะแนนเดิมที่ถูกลบ</h3>
+                                    <p class="text-xs text-gray-500 mt-1">วิชา: <span class="font-semibold text-gray-700">${extra.subject || '-'}</span> | ห้องที่ลบ: <span class="font-semibold text-gray-700">${extra.className || '-'}</span></p>
+                                </div>
+                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            
+                            <div class="flex border-b border-gray-200 bg-gray-50 overflow-x-auto hide-scroll px-4">
+                `;
+
+                for(let i=0; i<cids.length; i++) {
+                    const cid = cids[i];
+                    const className = scoresMap[cid]._metadata?.className || extra.className.split(', ')[i] || `ห้องรหัส ${cid}`;
+                    html += `
+                        <button class="backup-tab-btn ${i === 0 ? 'text-primary border-b-2 border-primary font-bold' : 'text-gray-500'} py-3 px-4 text-sm focus:outline-none transition-colors" 
+                                data-cid="${cid}" onclick="app.ui.switchBackupClassTab('${historyId}', '${cid}')">
+                            ${className}
+                        </button>
+                    `;
+                }
+
+                html += `
+                            </div>
+                            <div class="p-0 overflow-y-auto flex-1" id="backup-scores-table-container">
+                                <div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>
+                            </div>
+                            <div class="p-4 border-t border-gray-200 bg-white text-right">
+                                <button onclick="app.modals.close()" class="px-6 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-200 font-medium shadow-sm">ปิดหน้าต่าง</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+
+                if (cids.length > 0) {
+                    await app.ui.switchBackupClassTab(historyId, cids[0]);
+                }
+                app.hideLoading(); 
+            },
+
+            // 7. Smart Import Excel Modal Overlay (New Feature!)
+            openImportExcel: () => {
+                const html = `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
+                                <h3 class="font-bold text-lg flex items-center"><i class="ph ph-file-xls mr-2 text-2xl"></i>นำเข้าข้อมูลจาก Excel (.xlsx)</h3>
+                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
+                            </div>
+                            <div class="p-6 space-y-4">
+                                <div class="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-lg text-xs space-y-2">
+                                    <h4 class="font-bold text-sm">💡 คำแนะนำการเตรียมไฟล์ Excel:</h4>
+                                    <p>ไฟล์ Excel ของท่านต้องมีคอลัมน์สำคัญดังต่อไปนี้ในแผ่นงานแรก:</p>
+                                    <ul class="list-disc pl-4 space-y-1 font-semibold">
+                                        <li>ระดับชั้น (เช่น ม.1/1, ม.4/2 หรือ ม.6/วิทย์-คณิต)</li>
+                                        <li>เลขที่ (เลขที่ของนักเรียน)</li>
+                                        <li>รหัสนักเรียน (รหัสประจำตัว)</li>
+                                        <li>ชื่อสกุล (ชื่อและนามสกุลของนักเรียน)</li>
+                                    </ul>
+                                    <p class="text-xxs text-blue-600 mt-1">*ระบบจะทำการสร้างห้องเรียนใหม่ให้โดยอัตโนมัติหากห้องเรียนนั้นยังไม่มีอยู่ในฐานข้อมูล</p>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">เลือกไฟล์ Excel ของท่าน</label>
+                                    <input type="file" id="excelFileInput" accept=".xlsx, .xls" 
+                                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-primary-dark cursor-pointer border border-gray-300 rounded-lg p-1 bg-gray-50">
+                                </div>
+
+                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
+                                    <button type="button" onclick="app.modals.submitImportExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium shadow-sm">เริ่มนำเข้าข้อมูล</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalContainer').innerHTML = html;
+            },
+
+            submitImportExcel: () => {
+                const fileInput = document.getElementById('excelFileInput');
+                if (fileInput.files.length === 0) {
+                    return Swal.fire({ icon: 'warning', title: 'ไม่ได้เลือกไฟล์', text: 'กรุณาเลือกไฟล์ Excel .xlsx ก่อนกดปุ่มนำเข้า', confirmButtonColor: '#F52746' });
+                }
+                app.actions.importFromExcel(fileInput.files[0]);
+            }
+        };
+
+        // สลับแท็บประวัติข้อมูลคะแนนเดิมที่ลบ
+        app.ui.switchBackupClassTab = async (historyId, classId) => {
+            document.querySelectorAll('.backup-tab-btn').forEach(btn => {
+                if (btn.dataset.cid === classId) {
+                    btn.classList.add('text-primary', 'border-b-2', 'border-primary', 'font-bold');
+                    btn.classList.remove('text-gray-500');
+                } else {
+                    btn.classList.remove('text-primary', 'border-b-2', 'border-primary', 'font-bold');
+                    btn.classList.add('text-gray-500');
+                }
+            });
+
+            const container = document.getElementById('backup-scores-table-container');
+            container.innerHTML = `<div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>`;
+
+            const historyItem = await app.api.get(`history/${historyId}`);
+            if(!historyItem || !historyItem.extraData || !historyItem.extraData.deletedScores) return;
+
+            const scores = historyItem.extraData.deletedScores[classId] || {};
+            const studentsObj = await app.api.get(`students/${classId}`);
+            const students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
+            const grader = scores._metadata ? scores._metadata.grader : '-';
+            const backupDate = scores._metadata?.timestamp ? new Date(scores._metadata.timestamp).toLocaleString('th-TH') : '-';
+
+            let tableHtml = `
+                <div class="bg-amber-50 p-3 text-xs text-amber-800 border-b border-amber-100 flex justify-between flex-wrap gap-2">
+                    <span>ผู้ตรวจคะแนน: <span class="font-semibold">${grader}</span></span>
+                    <span>บันทึกก่อนถูกลบเมื่อ: <span class="font-semibold">${backupDate}</span></span>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-100 sticky top-0">
+                        <tr>
+                            <th class="px-4 py-3 text-center text-gray-600 w-16">เลขที่</th>
+                            <th class="px-4 py-3 text-left text-gray-600">ชื่อ-สกุล</th>
+                            <th class="px-4 py-3 text-center text-gray-600 w-32">คะแนนเดิม</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+            `;
+
+            if(students.length === 0) {
+                tableHtml += `<tr><td colspan="3" class="text-center py-6 text-gray-500">ไม่มีรายชื่อนักเรียนในห้องเรียนนี้</td></tr>`;
+            }
+
+            students.forEach(s => {
+                const score = scores[s.id] !== undefined ? scores[s.id] : '-';
+                const isScoreEmpty = score === '-' || score === '';
+                tableHtml += `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-2 text-center text-gray-500">${s.no}</td>
+                        <td class="px-4 py-2 text-gray-700">${s.name}</td>
+                        <td class="px-4 py-2 text-center font-bold ${isScoreEmpty ? 'text-gray-400' : 'text-gray-800 text-base'}">${isScoreEmpty ? '-' : score}</td>
+                    </tr>
+                `;
+            });
+
+            tableHtml += `</tbody></table>`;
+            container.innerHTML = tableHtml;
+        };
+
+        // Initialize App
+        document.addEventListener('DOMContentLoaded', () => {
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+            `;
+            document.head.appendChild(style);
+            
+            app.navigate('home');
+        });
+
+    </script>
+</body>
+</html>
