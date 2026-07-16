@@ -39,6 +39,9 @@
     <!-- SheetJS (XLSX Parsing Library) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
+    <!-- Marked.js (Markdown Parser for AI output) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
     <style>
         body { font-family: 'Prompt', sans-serif; background-color: #f3f4f6; color: #111827; }
         .glass-header { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
@@ -56,6 +59,15 @@
         .table-container::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
         .table-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .table-container::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* AI Markdown Styling */
+        .ai-content h1 { font-size: 1.25rem; font-weight: bold; margin-top: 1rem; margin-bottom: 0.5rem; color: #1f2937; border-left: 4px solid #F52746; padding-left: 8px; }
+        .ai-content h2 { font-size: 1.1rem; font-weight: bold; margin-top: 0.8rem; margin-bottom: 0.4rem; color: #374151; }
+        .ai-content p { margin-bottom: 0.75rem; line-height: 1.6; color: #4b5563; }
+        .ai-content ul { list-style-type: decimal; padding-left: 1.25rem; margin-bottom: 0.75rem; }
+        .ai-content li { margin-bottom: 0.25rem; color: #4b5563; }
+        .ai-content strong { color: #111827; font-weight: 600; }
+        .ai-content blockquote { border-left: 4px solid #cbd5e1; padding-left: 12px; font-style: italic; color: #6b7280; margin: 1rem 0; }
     </style>
 </head>
 <body class="text-sm md:text-base">
@@ -133,6 +145,14 @@
                 tempData: {}, // For passing data between views
                 searchQuery: "", // สำหรับตัวค้นหา
                 statusFilter: "all", // ตัวกรองสถานะ (all, graded, partial, ungraded)
+                isTodayFilter: false, // ตัวกรองวันสอบเฉพาะวันนี้ (Admin Exams Tab)
+                
+                // Admin Advanced Filters
+                adminFilterDropdownOpen: false,
+                adminFilterHasExams: false,
+                adminFilterHasScores: false,
+                adminFilterAllGraded: false,
+                
                 searchTimeout: null // สำหรับ Debounce ป้องกันพิมพ์แล้วรีเฟรชถี่
             },
 
@@ -194,6 +214,40 @@
                     await app.api.push('history', {
                         action, details, refId, extraData, timestamp: Date.now()
                     });
+                },
+
+                // --- INTEGRATION: Gemini LLM API Call with Exponential Backoff ---
+                callGemini: async (contents, systemInstruction = "") => {
+                    const apiKey = ""; // supplied at runtime
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                    
+                    const payload = {
+                        contents: contents
+                    };
+                    if (systemInstruction) {
+                        payload.systemInstruction = {
+                            parts: [{ text: systemInstruction }]
+                        };
+                    }
+
+                    const delays = [1000, 2000, 4000, 8000, 16000];
+                    for (let i = 0; i <= delays.length; i++) {
+                        try {
+                            const response = await fetch(url, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                            const result = await response.json();
+                            return result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                        } catch (error) {
+                            if (i === delays.length) {
+                                throw error; // All retries failed
+                            }
+                            await new Promise(resolve => setTimeout(resolve, delays[i]));
+                        }
+                    }
                 }
             },
 
@@ -221,6 +275,12 @@
                         params: JSON.parse(JSON.stringify(app.state.tempData)),
                         searchQuery: app.state.searchQuery,
                         statusFilter: app.state.statusFilter,
+                        isTodayFilter: app.state.isTodayFilter,
+                        
+                        adminFilterHasExams: app.state.adminFilterHasExams,
+                        adminFilterHasScores: app.state.adminFilterHasScores,
+                        adminFilterAllGraded: app.state.adminFilterAllGraded,
+
                         page: app.state.pagination.page
                     });
                 }
@@ -228,11 +288,17 @@
                 app.state.currentView = view;
                 app.state.tempData = params;
                 
-                // รีเซ็ตค่าการค้นหาและหน้าเมื่อไปยังหน้าใหม่
+                // รีเซ็ตค่าการค้นหาและหน้าเมื่อไปยังหน้าใหม่ (ถ้าไม่ใช่การย้อนกลับ)
                 if (!isBack) {
                     app.state.pagination.page = 1;
                     app.state.searchQuery = "";
                     app.state.statusFilter = "all";
+                    app.state.isTodayFilter = false;
+                    
+                    app.state.adminFilterDropdownOpen = false;
+                    app.state.adminFilterHasExams = false;
+                    app.state.adminFilterHasScores = false;
+                    app.state.adminFilterAllGraded = false;
                 }
                 
                 // Update Top Navbar Visibility (Back Button)
@@ -304,6 +370,12 @@
                     const prev = app.state.history.pop();
                     app.state.searchQuery = prev.searchQuery;
                     app.state.statusFilter = prev.statusFilter;
+                    app.state.isTodayFilter = prev.isTodayFilter;
+                    
+                    app.state.adminFilterHasExams = prev.adminFilterHasExams || false;
+                    app.state.adminFilterHasScores = prev.adminFilterHasScores || false;
+                    app.state.adminFilterAllGraded = prev.adminFilterAllGraded || false;
+
                     app.state.pagination.page = prev.page || 1;
                     app.navigate(prev.view, prev.params, true);
                 } else {
@@ -499,7 +571,7 @@
                     <div class="flex flex-col items-center justify-center min-h-[60vh] text-center">
                         <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSVcb4_iotfwEJf9W6CNhIqY-MJkwz0NC6xH8PiXoy2qQuBQoszEcMZpnE&s=10" 
                              alt="Logo" class="w-32 h-32 object-cover rounded-2xl shadow-lg mb-6 border-4 border-white">
-                        <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-2">ยินดีต้อนรับสู่ระบบจัดการสอบ</h1>
+                        <h1 class="text-3xl md:text-4xl font-bold text-gray-800 mb-2">ยินดีต้อนรับสู่ระบบจัดการสอบ</h1>
                         <p class="text-gray-500 mb-8">โรงเรียนสกลวิทยา</p>
                         
                         <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
@@ -611,7 +683,7 @@
                     </div>
 
                     <!-- Search and Filter Controls -->
-                    <div class="hidden bg-white p-4 rounded-xl shadow-md border border-gray-200 mb-6 flex flex-col sm:flex-row gap-3 items-center">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-col sm:flex-row gap-3 items-center">
                         <div class="relative w-full sm:flex-1">
                             <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
                             <input type="text" id="publicExamSearch" placeholder="ค้นหาชื่อวิชา..." value="${app.state.searchQuery}" 
@@ -640,7 +712,7 @@
                     const date = new Date(e.timestamp).toLocaleDateString('th-TH');
                     
                     html += `
-                        <div class="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden hover:border-red-100 transition-colors">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:border-red-100 transition-colors">
                             <div class="p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between border-b border-gray-100 bg-gray-50 gap-4">
                                 <div>
                                     <div class="flex items-center gap-2 flex-wrap mb-1">
@@ -722,9 +794,9 @@
                         <p class="text-gray-500 ml-4 mt-1 text-sm">ผู้ดูแลระบบ</p>
                     </div>
                     
-                    <div class="bg-gray-200 rounded-xl shadow-sm border border-gray-200">
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
                         <!-- Tabs -->
-                        <div class="bg-white flex border-b border-gray-200 overflow-x-auto hide-scroll">
+                        <div class="flex border-b border-gray-200 overflow-x-auto hide-scroll">
                             <button class="admin-tab active flex-1 py-4 px-6 text-center font-medium text-primary border-b-2 border-primary focus:outline-none whitespace-nowrap" data-target="admin-exams">
                                 <i class="ph ph-exam text-lg mr-1 align-middle"></i> รายการสอบ
                             </button>
@@ -796,10 +868,10 @@
                     </div>
 
                     <div class="relative mb-6">
-                        <i class="hidden ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
+                        <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
                         <input type="text" id="adminTeacherExamsSearch" placeholder="ค้นหาชื่อวิชาสอบ..." value="${app.state.searchQuery}" 
                                oninput="app.handleSearch(this.value, {type: 'renderView'})" 
-                               class="hidden w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
+                               class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
                     </div>
 
                     <div class="space-y-4">
@@ -828,10 +900,9 @@
                                 <button onclick="app.actions.deleteExam('${e.id}', '${teacherId}', '${teacherName}')" class="p-2 text-red-500 hover:bg-red-50 rounded border border-red-200 transition" title="ลบวิชาสอบ">
                                     <i class="ph ph-trash text-lg"></i>
                                 </button>
-                                <button onclick="app.navigate('admin-manage-scores', { examId: '${e.id}', subjectName: '${e.subject}', teacherId: '${teacherId}', teacherName: '${teacherName}' })" class="bg-gray-100 ml-6 hover:bg-gray-200 text-gray-700 px-3 py-3 rounded text-sm font-medium transition border border-gray-300">
+                                <button onclick="app.navigate('admin-manage-scores', { examId: '${e.id}', subjectName: '${e.subject}', teacherId: '${teacherId}', teacherName: '${teacherName}' })" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm font-medium transition border border-gray-300">
                                     จัดการคะแนน <i class="ph ph-caret-right ml-1"></i>
                                 </button>
-                                
                             </div>
                         </div>
                     `;
@@ -977,6 +1048,13 @@
                     app.state.pagination.page = 1;
                     app.state.searchQuery = "";
                     app.state.statusFilter = "all";
+                    app.state.isTodayFilter = false;
+                    
+                    app.state.adminFilterDropdownOpen = false;
+                    app.state.adminFilterHasExams = false;
+                    app.state.adminFilterHasScores = false;
+                    app.state.adminFilterAllGraded = false;
+
                     app.state.tempData.activeTab = tab.dataset.target; // จำสถานะแท็บ
                     app.loadAdminTab(tab.dataset.target);
                 });
@@ -1008,6 +1086,7 @@
             if(tabName === 'admin-teachers') container.innerHTML = await app.adminTabs.teachers();
             if(tabName === 'admin-history') container.innerHTML = await app.adminTabs.history();
 
+            // คืนค่าเคอร์เซอร์หลังการสลับ DOM
             if (focusData) {
                 const el = document.getElementById(focusData.id);
                 if (el) {
@@ -1018,159 +1097,160 @@
         };
 
         app.adminTabs = {
-          exams: async () => {
-            const [teachersObj, examsObj, schedulesObj,scoresObj] = await Promise.all([
-                app.api.get('teachers'), 
-                app.api.get('exams'), 
-                app.api.get('schedules'),
-                app.api.get('scores')
-            ]);
-            let teachers = teachersObj ? Object.entries(teachersObj).map(([id, t]) => ({id, ...t})) : [];
-            const exams = examsObj ? Object.entries(examsObj).map(([id, e]) => ({id, ...e})) : [];
-            const schedules = schedulesObj ? Object.values(schedulesObj) : [];
-            const allScores = scoresObj || {};
-            
-            const selectedDate = app.state.filterDate || ''; 
+            exams: async () => {
+                const [teachersObj, examsObj, schedulesObj, scoresObj] = await Promise.all([
+                    app.api.get('teachers'),
+                    app.api.get('exams'),
+                    app.api.get('schedules'),
+                    app.api.get('scores') // Pre-fetch for quick filtering
+                ]);
+                let teachers = teachersObj ? Object.entries(teachersObj).map(([id, t]) => ({id, ...t})) : [];
+                const exams = examsObj ? Object.entries(examsObj).map(([id, e]) => ({id, ...e})) : [];
+                const schedules = schedulesObj ? Object.values(schedulesObj) : [];
+                const allScores = scoresObj || {};
 
-            if (selectedDate) {
-                const dateExamIds = new Set(schedules.filter(s => s.date === selectedDate).map(s => s.examId));
-                const dateTeacherIds = new Set(exams.filter(e => dateExamIds.has(e.id)).map(e => e.teacherId));
-                teachers = teachers.filter(t => dateTeacherIds.has(t.id));
-            }
-            
-            const getExamStatusSync = (examId, classesObj) => {
-                const classIds = Object.keys(classesObj || {});
-                if (classIds.length === 0) return "ยังไม่ตรวจ";
-                let gradedCount = 0;
-                for (const cid of classIds) {
-                    const scoreData = allScores[examId] ? allScores[examId][cid] : null;
-                    if (scoreData && scoreData._metadata && Object.keys(scoreData).length > 1) {
-                        gradedCount++;
+                const today = new Date();
+                const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+                if (app.state.isTodayFilter) {
+                    const todayExamIds = new Set(schedules.filter(s => s.date === todayStr).map(s => s.examId));
+                    const todayTeacherIds = new Set(exams.filter(e => todayExamIds.has(e.id)).map(e => e.teacherId));
+                    teachers = teachers.filter(t => todayTeacherIds.has(t.id));
+                }
+
+                // --- NEW: Calculate Teacher Stats for Filters ---
+                const getExamStatusSync = (examId, classesObj) => {
+                    const classIds = Object.keys(classesObj || {});
+                    if (classIds.length === 0) return "ยังไม่ตรวจ";
+                    let gradedCount = 0;
+                    for (const cid of classIds) {
+                        const scoreData = allScores[examId] ? allScores[examId][cid] : null;
+                        if (scoreData && scoreData._metadata && Object.keys(scoreData).length > 1) {
+                            gradedCount++;
+                        }
                     }
+                    if (gradedCount === 0) return "ยังไม่ตรวจ";
+                    else if (gradedCount < classIds.length) return "บางส่วน";
+                    else return "ตรวจแล้ว";
+                };
+
+                const teacherStats = {};
+                for (let t of teachers) {
+                    const tExams = exams.filter(e => e.teacherId === t.id);
+                    if (tExams.length === 0) {
+                        teacherStats[t.id] = { hasExams: false, hasScores: false, allGraded: false };
+                        continue;
+                    }
+                    let anyGraded = false;
+                    let allExamsGraded = true;
+                    for (let e of tExams) {
+                        const statusText = getExamStatusSync(e.id, e.classes);
+                        if (statusText !== "ยังไม่ตรวจ") anyGraded = true;
+                        if (statusText !== "ตรวจแล้ว") allExamsGraded = false;
+                    }
+                    teacherStats[t.id] = { hasExams: true, hasScores: anyGraded, allGraded: allExamsGraded };
                 }
-                if (gradedCount === 0) return "ยังไม่ตรวจ";
-                else if (gradedCount < classIds.length) return "บางส่วน";
-                else return "ตรวจแล้ว";
-            };
 
-            const teacherStats = {};
-            for (let t of teachers) {
-                const tExams = exams.filter(e => e.teacherId === t.id);
-                if (tExams.length === 0) {
-                    teacherStats[t.id] = { hasExams: false, hasScores: false, allGraded: false };
-                    continue;
+                // --- Apply New Checkbox Filters ---
+                if (app.state.adminFilterHasExams) {
+                    teachers = teachers.filter(t => teacherStats[t.id].hasExams);
                 }
-                let anyGraded = false;
-                let allExamsGraded = true;
-                for (let e of tExams) {
-                    const statusText = getExamStatusSync(e.id, e.classes);
-                    if (statusText !== "ยังไม่ตรวจ") anyGraded = true;
-                    if (statusText !== "ตรวจแล้ว") allExamsGraded = false;
+                if (app.state.adminFilterHasScores) {
+                    teachers = teachers.filter(t => teacherStats[t.id].hasScores);
                 }
-                teacherStats[t.id] = { hasExams: true, hasScores: anyGraded, allGraded: allExamsGraded };
-            }
+                if (app.state.adminFilterAllGraded) {
+                    teachers = teachers.filter(t => teacherStats[t.id].allGraded);
+                }
 
-            if (app.state.adminFilterHasExams) {
-                teachers = teachers.filter(t => teacherStats[t.id].hasExams);
-            }
-            if (app.state.adminFilterHasScores) {
-                teachers = teachers.filter(t => teacherStats[t.id].hasScores);
-            }
-            if (app.state.adminFilterAllGraded) {
-                teachers = teachers.filter(t => teacherStats[t.id].allGraded);
-            }
-            
-            // ค้นหาแบบ Real-time (ชื่อครู หรือ ชื่อวิชา)
-            const searchQ = app.state.searchQuery.toLowerCase().trim();
-            if (searchQ) {
-                teachers = teachers.filter(t => {
-                    const matchName = t.name.toLowerCase().includes(searchQ);
-                    const teacherExams = exams.filter(e => e.teacherId === t.id);
-                    const matchSubject = teacherExams.some(e => e.subject.toLowerCase().includes(searchQ));
-                    return matchName || matchSubject;
-                });
-            }
+                // ค้นหาแบบ Real-time (ชื่อครู หรือ ชื่อวิชา)
+                const searchQ = app.state.searchQuery.toLowerCase().trim();
+                if (searchQ) {
+                    teachers = teachers.filter(t => {
+                        const matchName = t.name.toLowerCase().includes(searchQ);
+                        const teacherExams = exams.filter(e => e.teacherId === t.id);
+                        const matchSubject = teacherExams.some(e => e.subject.toLowerCase().includes(searchQ));
+                        return matchName || matchSubject;
+                    });
+                }
 
-            const hasActiveFilter = app.state.adminFilterHasExams || app.state.adminFilterHasScores || app.state.adminFilterAllGraded;
+                const hasActiveFilter = app.state.adminFilterHasExams || app.state.adminFilterHasScores || app.state.adminFilterAllGraded;
 
-            let html = `
-                <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
-                    <div class="flex flex-col sm:flex-row gap-3 w-full sm:flex-1 items-center">
-                        
-                        <div class="relative w-full max-w-sm">
-                            <i class="ph ph-magnifying-glass absolute left-3 top-3 text-gray-400"></i>
-                            <input type="text" id="adminTabExamsSearch" placeholder="ค้นหาชื่อครู หรือ ชื่อวิชาสอบ..." value="${app.state.searchQuery}" 
-                                  oninput="app.handleSearch(this.value, {type: 'loadAdminTab', tab: 'admin-exams'})" 
-                                  class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm">
-                        </div>
-
-                        <div class="flex items-center space-x-2 bg-white border border-gray-300 px-3 py-1.5 rounded-lg shadow-sm w-full sm:w-auto">
-                            <i class="ph ph-calendar-blank text-lg text-primary"></i>
-                            <label for="adminFilterDate" class="text-sm text-gray-700 whitespace-nowrap">เลือกวันที่สอบ:</label>
-                            <input type="date" id="adminFilterDate" 
-                                  value="${selectedDate}" 
-                                  onchange="app.state.filterDate = this.value; app.state.pagination.page = 1; app.loadAdminTab('admin-exams');" 
-                                  class="border-none focus:ring-0 text-sm text-gray-700 cursor-pointer p-0 w-28 sm:w-auto">
+                let html = `
+                    <div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-4">
+                        <div class="flex flex-col sm:flex-row gap-3 w-full md:flex-1 items-start sm:items-center">
+                            <label class="flex items-center text-sm text-gray-700 cursor-pointer bg-white border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm w-full sm:w-auto whitespace-nowrap h-[38px] mt-0.5">
+                                <input type="checkbox" id="adminFilterTodayCheckbox" 
+                                       onchange="app.state.isTodayFilter = this.checked; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" 
+                                       ${app.state.isTodayFilter ? 'checked' : ''} 
+                                       class="rounded text-primary focus:ring-primary w-4 h-4 mr-2">
+                                <i class="ph ph-calendar-star text-lg mr-1.5 text-primary"></i> วันนี้
+                            </label>
                             
-                            ${selectedDate ? `<button onclick="app.state.filterDate = ''; app.state.pagination.page = 1; app.loadAdminTab('admin-exams');" class="text-gray-400 hover:text-red-500 transition ml-2"><i class="ph ph-x-circle text-lg"></i></button>` : ''}
-                        </div>
-
-                        <div class="relative w-full sm:w-auto h-full mt-0.5" id="adminFilterDropdownContainer">
-                          <button onclick="app.ui.toggleAdminFilter()" class="w-full sm:w-auto flex items-center justify-center text-sm ${hasActiveFilter ? 'bg-red-50 text-primary border-red-200' : 'text-gray-700 bg-white border-gray-300'} px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm h-[38px] whitespace-nowrap">
-                              <i class="ph ph-funnel text-lg mr-1.5"></i> กรองเพิ่มเติม
-                          </button>
-                          <div id="adminTeacherFilterDropdown" class="${app.state.adminFilterDropdownOpen ? '' : 'hidden'} absolute top-full mt-2 left-0 sm:left-auto sm:right-0 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4">
-                              <h4 class="text-xs font-bold text-gray-400 mb-3 uppercase tracking-wider">สถานะการสอบ</h4>
-                              <label class="flex items-start space-x-3 mb-3 cursor-pointer group">
-                                  <input type="checkbox" onchange="app.state.adminFilterHasExams = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterHasExams ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
-                                  <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">แสดงเฉพาะที่มีการสอบ</span>
-                              </label>
-                              <label class="flex items-start space-x-3 mb-3 cursor-pointer group">
-                                  <input type="checkbox" onchange="app.state.adminFilterHasScores = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterHasScores ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
-                                  <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">เริ่มมีคะแนนแล้ว</span>
-                              </label>
-                              <label class="flex items-start space-x-3 cursor-pointer group">
-                                  <input type="checkbox" onchange="app.state.adminFilterAllGraded = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterAllGraded ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
-                                  <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">คะแนนครบหมดแล้ว</span>
-                              </label>
-                          </div>
-                        </div>
-
-                    </div>
-                </div>
-                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            `;
-
-            if(teachers.length === 0) html += `<div class="col-span-full">${app.components.emptyState('ไม่พบข้อมูล')}</div>`;
-
-            app.paginate(teachers).forEach(t => {
-                let badges = '';
-                if (teacherStats[t.id]) {
-                      if(teacherStats[t.id].allGraded && teacherStats[t.id].hasExams) badges = `<span class="px-2 py-0.5 bg-green-50 text-green-600 border border-green-100 rounded text-[10px] font-semibold">ตรวจครบ</span>`;
-                      else if(teacherStats[t.id].hasScores) badges = `<span class="px-2 py-0.5 bg-amber-50 text-amber-600 border border-amber-100 rounded text-[10px] font-semibold">เริ่มตรวจแล้ว</span>`;
-                      else if(teacherStats[t.id].hasExams) badges = `<span class="px-2 py-0.5 bg-gray-50 text-gray-500 border border-gray-200 rounded text-[10px] font-semibold">มีวิชาสอบ</span>`;
-                      else badges = `<span class="px-2 py-0.5 bg-gray-50 text-gray-400 border border-gray-200 rounded text-[10px] font-semibold">ยังไม่มีวิชาสอบ</span>`;
-                }
-
-                html += `
-                    <div onclick="app.navigate('admin-teacher-exams', { teacherId: '${t.id}', teacherName: '${t.name}' })" 
-                          class="border border-gray-200 rounded-lg p-4 hover:border-primary hover:shadow shadow-sm cursor-pointer transition flex flex-col gap-2 bg-white">
-                        <div class="flex justify-between items-start">
-                            <div class="flex items-center">
-                                <i class="ph ph-folder text-2xl text-gray-400 mr-3"></i>
-                                <span class="font-medium text-gray-700">${t.name}</span>
+                            <div class="relative w-full max-w-sm h-full mt-0.5">
+                                <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
+                                <input type="text" id="adminTabExamsSearch" placeholder="ค้นหาชื่อครู หรือ ชื่อวิชาสอบ..." value="${app.state.searchQuery}" 
+                                       oninput="app.handleSearch(this.value, {type: 'loadAdminTab', tab: 'admin-exams'})" 
+                                       class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-white shadow-sm h-[38px]">
                             </div>
-                            <i class="ph ph-caret-right text-gray-400 mt-1"></i>
-                        </div>
-                        <div class="flex justify-start ml-9">
-                            ${badges}
+
+                            <!-- New Filter Dropdown -->
+                            <div class="relative w-full sm:w-auto h-full mt-0.5" id="adminFilterDropdownContainer">
+                                <button onclick="app.ui.toggleAdminFilter()" class="w-full sm:w-auto flex items-center justify-center text-sm ${hasActiveFilter ? 'bg-red-50 text-primary border-red-200' : 'text-gray-700 bg-white border-gray-300'} px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm h-[38px] whitespace-nowrap">
+                                    <i class="ph ph-funnel text-lg mr-1.5"></i> กรองเพิ่มเติม
+                                </button>
+                                <div id="adminTeacherFilterDropdown" class="${app.state.adminFilterDropdownOpen ? '' : 'hidden'} absolute top-full mt-2 left-0 sm:left-auto sm:right-0 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4">
+                                    <h4 class="text-xs font-bold text-gray-400 mb-3 uppercase tracking-wider">สถานะการสอบ</h4>
+                                    <label class="flex items-start space-x-3 mb-3 cursor-pointer group">
+                                        <input type="checkbox" onchange="app.state.adminFilterHasExams = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterHasExams ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
+                                        <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">แสดงเฉพาะที่มีการสอบ</span>
+                                    </label>
+                                    <label class="flex items-start space-x-3 mb-3 cursor-pointer group">
+                                        <input type="checkbox" onchange="app.state.adminFilterHasScores = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterHasScores ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
+                                        <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">เริ่มมีคะแนนแล้ว</span>
+                                    </label>
+                                    <label class="flex items-start space-x-3 cursor-pointer group">
+                                        <input type="checkbox" onchange="app.state.adminFilterAllGraded = this.checked; app.state.adminFilterDropdownOpen = true; app.state.pagination.page = 1; app.loadAdminTab('admin-exams', true);" ${app.state.adminFilterAllGraded ? 'checked' : ''} class="mt-0.5 rounded text-primary focus:ring-primary w-4 h-4">
+                                        <span class="text-sm text-gray-700 group-hover:text-primary transition leading-tight">คะแนนครบหมดแล้ว</span>
+                                    </label>
+                                </div>
+                            </div>
+
                         </div>
                     </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 `;
-            });
-            html += `</div>` + app.renderPagination(teachers.length, "app.loadAdminTab('admin-exams')");
-            return html;
-        },
+
+                if(teachers.length === 0) html += `<div class="col-span-full">${app.components.emptyState('ไม่พบข้อมูลการค้นหา หรือตัวกรอง')}</div>`;
+
+                app.paginate(teachers).forEach(t => {
+                    // สร้าง Label ย่อยๆ เพื่อบอกว่าครูคนนี้ผ่านเงื่อนไขใดบ้าง (Optional visual cue)
+                    let badges = '';
+                    if (teacherStats[t.id]) {
+                         if(teacherStats[t.id].allGraded && teacherStats[t.id].hasExams) badges = `<span class="px-2 py-0.5 bg-green-50 text-green-600 border border-green-100 rounded text-[10px] font-semibold">ตรวจครบ</span>`;
+                         else if(teacherStats[t.id].hasScores) badges = `<span class="px-2 py-0.5 bg-amber-50 text-amber-600 border border-amber-100 rounded text-[10px] font-semibold">เริ่มตรวจแล้ว</span>`;
+                         else if(teacherStats[t.id].hasExams) badges = `<span class="px-2 py-0.5 bg-gray-50 text-gray-500 border border-gray-200 rounded text-[10px] font-semibold">มีวิชาสอบ</span>`;
+                    }
+
+                    html += `
+                        <div onclick="app.navigate('admin-teacher-exams', { teacherId: '${t.id}', teacherName: '${t.name}' })" 
+                             class="border border-gray-200 rounded-lg p-4 hover:border-primary hover:shadow cursor-pointer transition flex flex-col gap-2 bg-white">
+                            <div class="flex justify-between items-start">
+                                <div class="flex items-center">
+                                    <i class="ph ph-folder text-2xl text-gray-400 mr-3"></i>
+                                    <span class="font-medium text-gray-700">${t.name}</span>
+                                </div>
+                                <i class="ph ph-caret-right text-gray-400 mt-1"></i>
+                            </div>
+                            <div class="flex justify-start ml-9">
+                                ${badges}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>` + app.renderPagination(teachers.length, "app.loadAdminTab('admin-exams')");
+                return html;
+            },
+
             schedules: async () => {
                 const [schedulesObj, examsObj, teachersObj] = await Promise.all([
                     app.api.get('schedules'), app.api.get('exams'), app.api.get('teachers')
@@ -1363,18 +1443,18 @@
                         <div class="flex flex-wrap gap-2">
                             <!-- Normal Mode -->
                             <div id="hist-normal-actions" class="${history.length === 0 ? 'hidden' : ''}">
-                                <button onclick="app.ui.toggleHistoryDeleteMode()" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded text-sm hover:bg-red-50 shadow-sm transition">
+                                <button onclick="app.ui.toggleHistoryDeleteMode()" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded text-sm hover:bg-red-50 shadow-sm transition font-medium">
                                     <i class="ph ph-trash mr-1"></i> เลือกลบประวัติ
                                 </button>
                             </div>
                             <!-- Delete Mode -->
                             <div id="hist-delete-actions" class="hidden flex space-x-2 items-center">
-                                <label class="flex items-center text-sm text-gray-600 mr-2 cursor-pointer">
+                                <label class="flex items-center text-sm text-gray-600 mr-2 cursor-pointer font-medium">
                                     <input type="checkbox" onclick="app.ui.toggleAllHistoryCheckboxes(this)" class="rounded text-primary focus:ring-primary mr-1 w-4 h-4">
                                     เลือกทั้งหมด
                                 </label>
                                 <button onclick="app.loadAdminTab('admin-history')" class="bg-gray-100 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-200 border border-gray-300">ยกเลิก</button>
-                                <button onclick="app.actions.bulkDeleteHistory()" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm shadow hover:bg-red-600 transition"><i class="ph ph-trash mr-1"></i> ยืนยันการลบ</button>
+                                <button onclick="app.actions.bulkDeleteHistory()" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm shadow hover:bg-red-600 transition font-medium"><i class="ph ph-trash mr-1"></i> ยืนยันการลบ</button>
                             </div>
                         </div>
                     </div>
@@ -1387,7 +1467,7 @@
                     const date = new Date(h.timestamp).toLocaleString('th-TH');
                     const hasData = h.extraData && h.extraData.deletedScores;
                     html += `
-                        <div class="border border-gray-100 rounded-lg p-4 bg-gray-50 flex items-start group relative ${hasData ? 'cursor-pointer hover:bg-gray-100 transition shadow-sm' : ''}"
+                        <div class="border border-gray-100 rounded-lg p-4 bg-gray-50 flex items-start group relative ${hasData ? 'cursor-pointer hover:border-primary hover:shadow-md bg-white transition' : ''}"
                              ${hasData ? `onclick="if(document.getElementById('hist-delete-actions') && !document.getElementById('hist-delete-actions').classList.contains('hidden')) return; app.modals.openDeletedScores('${h.id}')"` : ''}>
                             
                             <!-- Checkbox Column -->
@@ -1398,11 +1478,11 @@
                             <!-- Content -->
                             <div class="flex-1">
                                 <div class="flex justify-between items-start mb-2">
-                                    <span class="font-medium text-gray-800">${h.action}</span>
+                                    <span class="font-bold text-gray-800">${h.action}</span>
                                     <span class="text-xs text-gray-400 bg-white px-2 py-1 rounded border border-gray-100"><i class="ph ph-clock mr-1"></i>${date}</span>
                                 </div>
                                 <p class="text-sm text-gray-600">${h.details}</p>
-                                ${hasData ? `<div class="mt-2 text-xs text-primary font-medium flex items-center"><i class="ph ph-eye mr-1 text-base"></i> คลิกเพื่อดูคะแนนเดิมที่ถูกลบ</div>` : ''}
+                                ${hasData ? `<div class="mt-2 text-xs text-primary font-semibold flex items-center"><i class="ph ph-eye mr-1 text-base"></i> คลิกเพื่อดูคะแนนเดิมที่ถูกลบ</div>` : ''}
                             </div>
                         </div>
                     `;
@@ -1416,7 +1496,7 @@
         // DYNAMIC UI BUILDERS (Public Exam Details & Admin Score Edit)
         // ==========================================
         app.ui = {
-          toggleAdminFilter: () => {
+            toggleAdminFilter: () => {
                 app.state.adminFilterDropdownOpen = !app.state.adminFilterDropdownOpen;
                 const dd = document.getElementById('adminTeacherFilterDropdown');
                 if (dd) {
@@ -1427,6 +1507,7 @@
                     }
                 }
             },
+
             renderPublicClassScores: async (examId, classId, className) => {
                 document.querySelectorAll(`.public-tab-${examId}`).forEach(t => {
                     if(t.dataset.id === classId) {
@@ -1476,6 +1557,13 @@
                             <div class="text-xs text-gray-500">ขาดสอบ (ไม่มีคะแนน)</div><div class="text-xl font-bold text-gray-600">${absent} คน</div>
                         </div>
                     </div>
+
+                    <!-- INTEGRATION: AI Summary & Insight Button -->
+                    <div class="mb-4 text-right">
+                        <button onclick="app.ui.runAIScoreAnalysis('${examId}', '${classId}', '${className}')" class="inline-flex items-center px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 shadow-md transition-all transform hover:-translate-y-0.5 text-sm font-medium">
+                            <i class="ph ph-sparkle text-lg mr-1.5 animate-pulse"></i> วิเคราะห์ผลสอบและข้อเสนอแนะด้วย AI ✨
+                        </button>
+                    </div>
                     
                     <div class="mb-3 flex flex-wrap justify-between text-xs text-gray-500 bg-gray-50 p-2 rounded border border-gray-100">
                         <div>ผู้ตรวจ: <span class="font-medium text-gray-700">${metadata.grader || '-'}</span></div>
@@ -1523,11 +1611,6 @@
                 const students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
                 const metadata = scoresObj?._metadata || { grader: '', examKey: '' };
                 const scores = scoresObj || {};
-
-                let cleanGraderName = metadata.grader;
-                if (cleanGraderName === undefined || cleanGraderName === 'undefined' || cleanGraderName === null) {
-                    cleanGraderName = ''; // เคลียร์ให้เป็นช่องว่าง
-                }
                 
                 // Calculate Summary
                 let validScores = [];
@@ -1574,6 +1657,10 @@
                             </div>
                             
                             <div class="flex space-x-2">
+                                <!-- INTEGRATION: AI Analysis button (Admin) -->
+                                <button onclick="app.ui.runAIScoreAnalysis('${examId}', '${classId}', '${className}')" class="bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded text-sm hover:bg-indigo-100 shadow-sm font-medium flex items-center">
+                                    <i class="ph ph-sparkle text-base mr-1 animate-pulse"></i> คำแนะนำ AI ✨
+                                </button>
                                 <button onclick="app.ui.toggleEditScores()" class="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-50 shadow-sm font-medium" id="btnEditScore">
                                     <i class="ph ph-pencil-simple mr-1"></i> แก้ไขคะแนน
                                 </button>
@@ -1622,7 +1709,7 @@
                         <div id="editControls" class="hidden mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex flex-col md:flex-row items-center justify-between gap-4">
                             <div class="flex items-center w-full md:w-auto">
                                 <label class="text-sm font-medium text-gray-700 mr-2 whitespace-nowrap">ผู้ตรวจ <span class="text-red-500">*</span>:</label>
-                                <input type="text" id="graderName" value="${cleanGraderName}" required placeholder="ชื่อผู้ตรวจ" class="w-full border border-gray-300 rounded px-3 py-1.5 focus:outline-none focus:border-primary bg-white">
+                                <input type="text" id="graderName" value="${metadata.grader}" required placeholder="ชื่อผู้ตรวจ" class="w-full border border-gray-300 rounded px-3 py-1.5 focus:outline-none focus:border-primary bg-white">
                             </div>
                             <div class="flex space-x-2 w-full md:w-auto justify-end">
                                 <button type="button" onclick="app.ui.renderAdminClassScores('${examId}', '${classId}', '${className}', ${maxScore})" class="px-4 py-1.5 border border-gray-300 text-gray-600 rounded hover:bg-gray-100 bg-white text-sm">ยกเลิก</button>
@@ -1667,21 +1754,106 @@
             toggleAllHistoryCheckboxes: (source) => {
                 const checkboxes = document.querySelectorAll('.hist-del-checkbox');
                 checkboxes.forEach(cb => cb.checked = source.checked);
+            },
+
+            // --- INTEGRATION: Run AI Score Analysis & Suggestion ---
+            runAIScoreAnalysis: async (examId, classId, className) => {
+                app.showLoading();
+                try {
+                    // Fetch students and scores
+                    const [studentsObj, scoresObj, examObj] = await Promise.all([
+                        app.api.get(`students/${classId}`),
+                        app.api.get(`scores/${examId}/${classId}`),
+                        app.api.get(`exams/${examId}`)
+                    ]);
+
+                    const students = studentsObj ? Object.entries(studentsObj).map(([id, s]) => ({id, ...s})).sort((a,b) => parseInt(a.no) - parseInt(b.no)) : [];
+                    const scores = scoresObj || {};
+                    const exam = examObj || {};
+                    const maxScore = exam.numQuestions || 20;
+
+                    let scoreReportList = [];
+                    students.forEach(s => {
+                        const score = scores[s.id] !== undefined ? scores[s.id] : 'ขาดสอบ';
+                        scoreReportList.push(`เลขที่ ${s.no} (${s.name}): คะแนน ${score}`);
+                    });
+
+                    const systemPrompt = `คุณคือ "ระบบผู้ช่วยจัดการสอบ AI" ประจำโรงเรียนสกลวิทยา ทำหน้าที่ประเมินและให้ข้อเสนอแนะในการพัฒนาการเรียนการสอนอย่างมีอาชีพ สุภาพ มีวุฒิภาวะ`;
+                    const userQuery = `ช่วยสรุปวิเคราะห์ผลคะแนนสอบวิชา "${exam.subject || 'ไม่ระบุ'}" สำหรับนักเรียนชั้น "${className}" (คะแนนเต็ม ${maxScore} คะแนน) ดังต่อไปนี้:
+${scoreReportList.join('\n')}
+
+กรุณาสรุปรายงานเป็นภาษาไทย โดยจัดรูปแบบด้วย Markdown ที่สวยงาม:
+1. สรุปภาพรวมสถิติอย่างรวดเร็ว (สูงสุด, ต่ำสุด, เฉลี่ย, ขาดสอบกี่คน)
+2. วิเคราะห์จุดเด่นของกลุ่มนักเรียนที่ผ่านเกณฑ์หรือได้คะแนนสูง
+3. วิเคราะห์ปัญหาที่พบและจุดด้อยของกลุ่มนักเรียนที่ได้คะแนนน้อย
+4. เสนอแนะวิธีแก้ไข ปรับปรุง และกิจกรรมสนับสนุนเป็นรายบุคคลหรือรายกลุ่มให้คุณครูนำไปปฏิบัติได้จริง (ระบุแนวทางการช่วยเหลือเด็กอ่อนและส่งเสริมเด็กเก่ง)`;
+
+                    const aiResponse = await app.api.callGemini([{ parts: [{ text: userQuery }] }], systemPrompt);
+                    app.hideLoading();
+
+                    // Open AI Result Modal
+                    app.modals.openAIResult('✨ รายงานการวิเคราะห์ผลคะแนนและคำแนะนำโดย AI', aiResponse);
+
+                } catch (err) {
+                    console.error(err);
+                    app.hideLoading();
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'การวิเคราะห์ล้มเหลว',
+                        text: 'ไม่สามารถติดต่อ AI ในขณะนี้ได้ กรุณาลองใหม่อีกครั้ง',
+                        confirmButtonColor: '#F52746'
+                    });
+                }
+            },
+
+            // --- INTEGRATION: Run AI Exam Blueprint / Blueprint suggestion ---
+            runAIExamDesign: async (inputFieldId, numFieldId) => {
+                const subjectName = document.getElementById(inputFieldId).value.trim();
+                const numQuestions = document.getElementById(numFieldId).value || 20;
+
+                if (!subjectName) {
+                    return Swal.fire({ icon: 'warning', title: 'กรุณากรอกชื่อรายวิชา', text: 'จำเป็นต้องระบุชื่อวิชาเพื่อให้นำไปออกแบบข้อสอบ', confirmButtonColor: '#F52746' });
+                }
+
+                app.showLoading();
+                try {
+                    const systemPrompt = `คุณคือ "ผู้เชี่ยวชาญการสร้างข้อสอบและคัดเลือกเนื้อหาหลักสูตร" ประจำโรงเรียนสกลวิทยา`;
+                    const userQuery = `ช่วยสร้างบลูพริ้นท์ (Test Specification) และแนวทางข้อสอบในวิชา "${subjectName}" จำนวน "${numQuestions}" ข้อ พร้อมยกตัวอย่างคำถามต้นแบบจำนวน 3 ข้อที่มีตัวเลือกตอบและเฉลยสั้นๆ เพื่อให้คุณครูสามารถนำไปเป็นแนวทางในการแต่งข้อสอบจริง
+
+กรุณาตอบเป็นภาษาไทย โดยใช้รูปแบบ Markdown (หัวข้อ, ตัวหนา, ลิสต์รายการ) ให้คุณครูนำไปศึกษาต่อได้ง่ายและน่าอ่าน`;
+
+                    const aiResponse = await app.api.callGemini([{ parts: [{ text: userQuery }] }], systemPrompt);
+                    app.hideLoading();
+
+                    app.modals.openAIResult('✨ ตัวช่วยออกแบบข้อสอบและไอเดียแนวทางโจทย์โดย AI', aiResponse);
+
+                } catch (err) {
+                    console.error(err);
+                    app.hideLoading();
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'ออกแบบข้อสอบล้มเหลว',
+                        text: 'ระบบขัดข้องชั่วคราว ไม่สามารถดึงแผนข้อสอบได้ กรุณาลองใหม่อีกครั้ง',
+                        confirmButtonColor: '#F52746'
+                    });
+                }
             }
         };
 
-        app.ui.initSearchableTeacherDropdown = (teachers, containerId, hiddenInputId, initialId = '', initialName = '') => {
+        // ==========================================
+        // GENERIC SEARCHABLE DROPDOWN (Reusable)
+        // ==========================================
+        app.ui.initSearchableDropdown = (items, containerId, hiddenInputId, placeholderText, initialId = '', initialName = '') => {
             const container = document.getElementById(containerId);
             if (!container) return;
 
-            // สร้างโครงสร้าง HTML สำหรับกล่องค้นหา
             container.innerHTML = `
                 <div class="relative w-full">
                     <div class="relative">
-                        <input type="text" id="${containerId}-search" value="${initialName}" placeholder="พิมพ์ค้นหาชื่อครูผู้สอน..." 
+                        <input type="text" id="${containerId}-search" value="${initialName}" placeholder="${placeholderText}" 
                                class="w-full border border-gray-300 rounded-lg pl-3 pr-10 py-2 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-sm bg-white cursor-pointer"
-                               onfocus="app.ui.showTeacherList('${containerId}')" 
-                               oninput="app.ui.filterTeacherList('${containerId}', this.value)" 
+                               onfocus="app.ui.showDropdownList('${containerId}')" 
+                               oninput="app.ui.filterDropdownList('${containerId}', '${hiddenInputId}', this.value)" 
                                autocomplete="off">
                         <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-gray-400">
                             <i class="ph ph-caret-down"></i>
@@ -1689,18 +1861,13 @@
                     </div>
                     <input type="hidden" id="${hiddenInputId}" value="${initialId}" required>
                     <div id="${containerId}-list" class="hidden absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50 divide-y divide-gray-100">
-                        <!-- รายการแนะนำจะถูกเพิ่มจาก JS -->
                     </div>
                 </div>
             `;
 
-            // บันทึกข้อมูลตั้งต้นลง Dataset ของตู้ Container เพื่อใช้เปรียบเทียบภายหลัง
-            container.dataset.teachers = JSON.stringify(teachers);
+            container.dataset.items = JSON.stringify(items);
+            app.ui.renderDropdownListItems(containerId, hiddenInputId, items);
 
-            // แสดงรายการแนะนำตามข้อมูลที่มี
-            app.ui.renderTeacherListItems(containerId, hiddenInputId, teachers);
-
-            // เมื่อคลิกพื้นที่อื่นนอกกล่อง ให้ปิดรายการ dropdown อัตโนมัติ (เพิ่มระบบป้องกัน Element ถูกทำลาย)
             const closeDropdown = (e) => {
                 if (!container || !container.isConnected) {
                     document.removeEventListener('click', closeDropdown);
@@ -1713,10 +1880,10 @@
                     const searchInput = document.getElementById(`${containerId}-search`);
                     const hiddenInput = document.getElementById(hiddenInputId);
                     if (searchInput && hiddenInput) {
-                        const currentTeachers = JSON.parse(container.dataset.teachers || '[]');
-                        const selectedTeacher = currentTeachers.find(t => t.id === hiddenInput.value);
-                        if (selectedTeacher) {
-                            searchInput.value = selectedTeacher.name;
+                        const currentItems = JSON.parse(container.dataset.items || '[]');
+                        const selectedItem = currentItems.find(i => i.id === hiddenInput.value);
+                        if (selectedItem) {
+                            searchInput.value = selectedItem.name;
                         } else {
                             searchInput.value = '';
                             hiddenInput.value = '';
@@ -1724,48 +1891,49 @@
                     }
                 }
             };
-            if (container._clickOutsideHandler) {
-                document.removeEventListener('click', container._clickOutsideHandler);
+            
+            // Cleanup old listener if it exists to prevent multiple bindings
+            if (window[`_clickOutsideHandler_${containerId}`]) {
+                document.removeEventListener('click', window[`_clickOutsideHandler_${containerId}`]);
             }
-            container._clickOutsideHandler = closeDropdown;
+            window[`_clickOutsideHandler_${containerId}`] = closeDropdown;
             document.addEventListener('click', closeDropdown);
         };
 
-        app.ui.renderTeacherListItems = (containerId, hiddenInputId, filteredTeachers) => {
+        app.ui.renderDropdownListItems = (containerId, hiddenInputId, filteredItems) => {
             const listContainer = document.getElementById(`${containerId}-list`);
             if (!listContainer) return;
 
-            if (filteredTeachers.length === 0) {
-                listContainer.innerHTML = `<div class="p-3 text-xs text-gray-500 text-center">ไม่พบชื่อครูผู้สอนในระบบ</div>`;
+            if (filteredItems.length === 0) {
+                listContainer.innerHTML = `<div class="p-3 text-xs text-gray-500 text-center">ไม่พบข้อมูลในระบบ</div>`;
                 return;
             }
 
-            listContainer.innerHTML = filteredTeachers.map(t => `
-                <div onclick="app.ui.selectTeacherOption('${containerId}', '${hiddenInputId}', '${t.id}', '${t.name.replace(/'/g, "\\'")}')" 
+            listContainer.innerHTML = filteredItems.map(i => `
+                <div onclick="app.ui.selectDropdownOption('${containerId}', '${hiddenInputId}', '${i.id}', '${i.name.replace(/'/g, "\\'")}')" 
                      class="px-4 py-2 hover:bg-red-50 hover:text-primary cursor-pointer transition text-sm text-gray-700 font-medium">
-                    ${t.name}
+                    ${i.name}
                 </div>
             `).join('');
         };
 
-        app.ui.showTeacherList = (containerId) => {
+        app.ui.showDropdownList = (containerId) => {
             const list = document.getElementById(`${containerId}-list`);
             if (list) list.classList.remove('hidden');
         };
 
-        app.ui.filterTeacherList = (containerId, query) => {
+        app.ui.filterDropdownList = (containerId, hiddenInputId, query) => {
             const container = document.getElementById(containerId);
             if (!container) return;
-            const teachers = JSON.parse(container.dataset.teachers || '[]');
+            const items = JSON.parse(container.dataset.items || '[]');
             
-            const filtered = teachers.filter(t => t.name.toLowerCase().includes(query.toLowerCase()));
-            const hiddenInputId = containerId === 'ce-teacher-container' ? 'ce-teacher' : 'ee-teacher';
+            const filtered = items.filter(i => i.name.toLowerCase().includes(query.toLowerCase()));
             
-            app.ui.renderTeacherListItems(containerId, hiddenInputId, filtered);
-            app.ui.showTeacherList(containerId);
+            app.ui.renderDropdownListItems(containerId, hiddenInputId, filtered);
+            app.ui.showDropdownList(containerId);
         };
 
-        app.ui.selectTeacherOption = (containerId, hiddenInputId, id, name) => {
+        app.ui.selectDropdownOption = (containerId, hiddenInputId, id, name) => {
             const searchInput = document.getElementById(`${containerId}-search`);
             const hiddenInput = document.getElementById(hiddenInputId);
             const list = document.getElementById(`${containerId}-list`);
@@ -1776,6 +1944,16 @@
             }
             if (list) list.classList.add('hidden');
         };
+
+        // Click outside listener for Admin Filter Dropdown
+        document.addEventListener('click', (e) => {
+            const container = document.getElementById('adminFilterDropdownContainer');
+            if (container && !container.contains(e.target)) {
+                app.state.adminFilterDropdownOpen = false;
+                const dd = document.getElementById('adminTeacherFilterDropdown');
+                if(dd) dd.classList.add('hidden');
+            }
+        });
 
         // ==========================================
         // DATA ACTIONS (CRUD to Firebase)
@@ -2059,7 +2237,6 @@
                             return Swal.fire({ icon: 'warning', title: 'ไฟล์ว่างเปล่า', text: 'กรุณาตรวจสอบว่าไฟล์มีข้อมูลอยู่จริง', confirmButtonColor: '#F52746' });
                         }
 
-                        // วิเคราะห์และตรวจจับชื่อหัวตาราง
                         const firstRow = rows[0];
                         const headers = Object.keys(firstRow);
                         
@@ -2083,9 +2260,8 @@
                             });
                         }
 
-                        // ดึงข้อมูลคลาสปัจจุบันเพื่อนำมาเปรียบเทียบ
                         const existingClasses = await app.api.get('classes') || {};
-                        const classLookup = {}; // Map: className -> classId
+                        const classLookup = {}; 
                         Object.entries(existingClasses).forEach(([cid, c]) => {
                             classLookup[c.name.trim()] = cid;
                         });
@@ -2094,7 +2270,6 @@
                         let createdClassesCount = 0;
                         let importedStudentsCount = 0;
 
-                        // วนลูปประมวลผลข้อมูลแถวต่อแถว
                         for (let row of rows) {
                             const rawClassName = String(row[keyClass] || '').trim();
                             const studentName = String(row[keyName] || '').trim();
@@ -2103,10 +2278,8 @@
 
                             if (!rawClassName || !studentName) continue;
 
-                            // จัดการตรวจสอบคลาสเรียน
                             let classId = classLookup[rawClassName];
                             if (!classId) {
-                                // หากไม่มีคลาส ให้สร้างใหม่ทันที (แยก ระดับชั้น และ ห้องเรียน)
                                 let level = 'ม.1';
                                 let room = '1';
 
@@ -2115,12 +2288,10 @@
                                     level = parts[0].trim();
                                     room = parts[1].trim();
                                 } else {
-                                    // Fallback กรณีไม่มี "/"
                                     level = rawClassName.substring(0, 3);
                                     room = rawClassName.substring(3).trim() || '1';
                                 }
 
-                                // สร้าง ID และกำหนดค่าการเขียนลง RTDB
                                 const newClassRef = push(ref(db, 'classes'));
                                 classId = newClassRef.key;
                                 
@@ -2130,12 +2301,10 @@
                                     name: rawClassName
                                 };
 
-                                // เพิ่มลง Lookup ทันทีเพื่อความรวดเร็วในการรันแถวถัดไป
                                 classLookup[rawClassName] = classId;
                                 createdClassesCount++;
                             }
 
-                            // สร้าง ID สำหรับตัวนักเรียนและบันทึกข้อมูล
                             const newStudentRef = push(ref(db, `students/${classId}`));
                             const studentId = newStudentRef.key;
 
@@ -2147,7 +2316,6 @@
                             importedStudentsCount++;
                         }
 
-                        // บันทึกแบบ Batch ไปยัง Firebase
                         if (Object.keys(updates).length > 0) {
                             await app.api.update(updates);
                             await app.api.logAction(
@@ -2155,7 +2323,7 @@
                                 `นำเข้ารายการจาก Excel: สร้างชั้นเรียนใหม่ ${createdClassesCount} ห้อง, นำเข้านักเรียน ${importedStudentsCount} คน`
                             );
 
-                            app.state.cache.classes = null; // ล้างแคชห้องเรียน
+                            app.state.cache.classes = null; 
                             app.hideLoading();
                             app.modals.close();
                             app.loadAdminTab('admin-classes');
@@ -2178,742 +2346,6 @@
                     }
                 };
                 reader.readAsArrayBuffer(file);
-            }
-        };
-
-        // ==========================================
-        // MODALS (Forms)
-        // ==========================================
-        app.modals = {
-            close: () => { document.getElementById('modalContainer').innerHTML = ''; },
-            
-            // --- Schedule Modals ---
-            openAddSchedule: async () => {
-              app.showLoading();
-              const [examsObj, teachersObj] = await Promise.all([app.api.get('exams'), app.api.get('teachers')]);
-              app.hideLoading();
-
-              const exams = examsObj ? Object.entries(examsObj).map(([id, e]) => ({id, ...e})) : [];
-              const teachers = teachersObj || {};
-              
-              // 1. ปรับปรุงข้อมูลสำหรับ Dropdown ให้เก็บรายละเอียดเยอะขึ้น
-              const examOptions = exams.map(e => {
-                const teacherName = teachers[e.teacherId] ? teachers[e.teacherId].name : 'ไม่ระบุครู';
-                
-                // ดึงรายชื่อห้องสอบทั้งหมดจาก e.classes (ถ้าไม่มีให้แสดงว่า ไม่ระบุห้อง)
-                // e.classes จะเก็บข้อมูลแบบ { "classId1": "ม.1/1", "classId2": "ม.1/2" }
-                const classNames = (e.classes && Object.keys(e.classes).length > 0) 
-                                  ? Object.values(e.classes).join(', ') 
-                                  : 'ไม่ระบุห้อง';
-
-                return {
-                    id: e.id,
-                    // ข้อความสำหรับใช้ค้นหา
-                    searchableText: `${e.subject} ${teacherName} ${classNames}`,
-                    // ข้อความที่จะไปโชว์ในช่อง Input เมื่อคลิกเลือกแล้ว
-                    displayName: `${e.subject} (ห้อง: ${classNames}, ครู: ${teacherName})`,
-                    // ข้อมูลย่อยสำหรับนำไปวาด UI
-                    subject: e.subject,
-                    teacher: teacherName,
-                    room: classNames
-                };
-            });
-
-              const today = new Date().toLocaleDateString('sv-SE');
-
-              const html = `
-                  <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                      <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-visible animate-[fadeIn_0.2s_ease-out]">
-                          <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
-                              <h3 class="font-bold text-lg flex items-center"><i class="ph ph-calendar-plus mr-2 text-xl"></i>เพิ่มตารางสอบ</h3>
-                              <button type="button" onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
-                          </div>
-                          <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddSchedule();">
-                              
-                              <div class="relative">
-                                  <label class="block text-sm font-medium text-gray-700 mb-1">เลือกรายการสอบ <span class="text-red-500">*</span></label>
-                                  <input type="text" id="sched-exam-search" 
-                                      class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white" 
-                                      placeholder="ค้นหาชื่อวิชา, ห้องสอบ หรือ ชื่อครู..." autocomplete="off">
-                                  <input type="hidden" id="sched-exam" required>
-                                  
-                                  <div id="sched-exam-list" 
-                                      class="absolute z-[110] w-full bg-white border border-gray-200 mt-1 rounded-lg shadow-xl hidden max-h-56 overflow-y-auto divide-y divide-gray-100">
-                                  </div>
-                              </div>
-
-                              <div>
-                                  <label class="block text-sm font-medium text-gray-700 mb-1">วันที่สอบ <span class="text-red-500">*</span></label>
-                                  <input type="date" id="sched-date" required value="${today}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                              </div>
-                              <div class="grid grid-cols-2 gap-3">
-                                  <div>
-                                      <label class="block text-sm font-medium text-gray-700 mb-1">เวลาเริ่ม <span class="text-red-500">*</span></label>
-                                      <input type="time" id="sched-start" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                  </div>
-                                  <div>
-                                      <label class="block text-sm font-medium text-gray-700 mb-1">เวลาสิ้นสุด <span class="text-red-500">*</span></label>
-                                      <input type="time" id="sched-end" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                  </div>
-                              </div>
-                              <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                                  <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
-                                  <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark text-sm font-medium shadow-sm">บันทึกตารางสอบ</button>
-                              </div>
-                          </form>
-                      </div>
-                  </div>
-              `;
-              document.getElementById('modalContainer').innerHTML = html;
-
-              const searchInput = document.getElementById('sched-exam-search');
-              const hiddenInput = document.getElementById('sched-exam');
-              const listContainer = document.getElementById('sched-exam-list');
-
-              // 2. ปรับปรุงฟังก์ชันวาดรายการแนะนำให้แสดงรายละเอียดชัดเจน
-              const renderList = (searchTerm = '') => {
-                const filtered = examOptions.filter(opt => 
-                    opt.searchableText.toLowerCase().includes(searchTerm.toLowerCase())
-                );
-
-                if (filtered.length === 0) {
-                    listContainer.innerHTML = '<div class="px-4 py-3 text-sm text-gray-500 text-center">ไม่พบรายการ...</div>';
-                } else {
-                    listContainer.innerHTML = filtered.map(opt => `
-                        <div class="group px-4 py-3 border-b border-gray-50 last:border-0 hover:bg-primary cursor-pointer transition-colors" 
-                            data-id="${opt.id}" data-name="${opt.displayName}">
-                            
-                            <div class="font-medium text-gray-800 group-hover:text-white text-sm mb-2">
-                                ${opt.subject}
-                            </div>
-                            
-                            <div class="flex flex-col space-y-1.5 text-xs text-gray-500 group-hover:text-gray-100">
-                                
-                                <div class="flex items-start">
-                                    <i class="ph ph-door text-sm mr-1.5 mt-0.5 flex-shrink-0"></i> 
-                                    <span class="leading-relaxed whitespace-normal"><span class="font-semibold">ห้อง:</span> ${opt.room}</span>
-                                </div>
-                                
-                                <div class="flex items-start">
-                                    <i class="ph ph-chalkboard-teacher text-sm mr-1.5 mt-0.5 flex-shrink-0"></i> 
-                                    <span><span class="font-semibold">ครู:</span> ${opt.teacher}</span>
-                                </div>
-                                
-                            </div>
-                        </div>
-                    `).join('');
-                }
-            };
-
-              searchInput.addEventListener('input', (e) => {
-                  renderList(e.target.value);
-                  listContainer.classList.remove('hidden');
-                  hiddenInput.value = ''; 
-              });
-
-              searchInput.addEventListener('focus', () => {
-                  renderList(searchInput.value);
-                  listContainer.classList.remove('hidden');
-              });
-
-              listContainer.addEventListener('mousedown', (e) => {
-                  const item = e.target.closest('div[data-id]');
-                  if (item) {
-                      searchInput.value = item.getAttribute('data-name');
-                      hiddenInput.value = item.getAttribute('data-id');
-                      listContainer.classList.add('hidden');
-                  }
-              });
-
-              searchInput.addEventListener('blur', () => {
-                  setTimeout(() => {
-                      listContainer.classList.add('hidden');
-                      if (!hiddenInput.value) {
-                          searchInput.value = '';
-                      }
-                  }, 150);
-              });
-          },
-            submitAddSchedule: async () => {
-                const examId = document.getElementById('sched-exam').value;
-                const date = document.getElementById('sched-date').value;
-                const startTime = document.getElementById('sched-start').value;
-                const endTime = document.getElementById('sched-end').value;
-
-                if(!examId || !date || !startTime || !endTime) return app.toast.fire({ icon: 'warning', title: 'กรุณากรอกข้อมูลให้ครบถ้วน' });
-
-                app.showLoading();
-                await app.api.push('schedules', { examId, date, startTime, endTime, timestamp: Date.now() });
-                app.hideLoading();
-                app.modals.close();
-                app.toast.fire({ icon: 'success', title: 'เพิ่มตารางสอบสำเร็จ' });
-                app.loadAdminTab('admin-schedules');
-            },
-
-            // 1. Create Exam (Public/Admin)
-            openCreateExam: async () => {
-                const [tObj, cObj] = await Promise.all([app.api.get('teachers'), app.api.get('classes')]);
-                const teachers = tObj ? Object.entries(tObj).map(([id, t]) => ({id, ...t})) : [];
-                const classes = cObj ? Object.entries(cObj).map(([id, c]) => ({id, ...c})).sort((a,b) => a.name.localeCompare(b.name)) : [];
-
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-lg"><i class="ph ph-exam mr-2"></i>สร้างรายการสอบ</h3>
-                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form id="formCreateExam" class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitCreateExam();">
-                                
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ครูผู้ออกสอบ <span class="text-red-500">*</span></label>
-                                    <div class="flex gap-2 items-center">
-                                        <!-- Searchable Dropdown Container -->
-                                        <div id="ce-teacher-container" class="flex-1"></div>
-                                        <button type="button" onclick="document.getElementById('ce-new-teacher-div').classList.toggle('hidden')" class="bg-gray-100 border border-gray-300 px-3 rounded-lg text-sm hover:bg-gray-200 h-[38px]" title="เพิ่มครูใหม่">
-                                            <i class="ph ph-plus"></i>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <!-- Inline Add Teacher -->
-                                <div id="ce-new-teacher-div" class="hidden bg-gray-50 p-3 rounded-lg border border-gray-200 flex gap-2 items-center">
-                                    <input type="text" id="ce-new-teacher-name" placeholder="ชื่อ-สกุล ครูท่านใหม่" class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
-                                    <button type="button" onclick="app.modals.addTeacherInline()" class="bg-green-500 text-white px-3 py-1.5 rounded text-sm hover:bg-green-600">เพิ่ม</button>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อรายวิชา <span class="text-red-500">*</span></label>
-                                    <input type="text" id="ce-subject" required placeholder="เช่น คณิตศาสตร์ ม.1" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">ระดับชั้นที่สอบ (เลือกได้มากกว่า 1) <span class="text-red-500">*</span></label>
-                                    <div class="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50 grid grid-cols-2 gap-2">
-                                        ${classes.length > 0 ? classes.map(c => `
-                                            <label class="inline-flex items-center">
-                                                <input type="checkbox" name="ce-classes" value="${c.id}" data-name="${c.name}" class="text-primary rounded focus:ring-primary w-4 h-4 mr-2">
-                                                <span class="text-sm text-gray-700">${c.name}</span>
-                                            </label>
-                                        `).join('') : '<span class="text-xs text-gray-500">ไม่มีข้อมูลชั้นเรียน (ต้องให้แอดมินเพิ่ม)</span>'}
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">จำนวนข้อสอบ <span class="text-red-500">*</span></label>
-                                    <input type="number" id="ce-num" required min="1" max="200" placeholder="ระบุตัวเลข" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                </div>
-
-                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark text-sm font-medium shadow-sm">เพิ่มรายการ</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-
-                // เรียกฟังก์ชันสำหรับจัดการ dropdown ค้นหาชื่อครู
-                app.ui.initSearchableTeacherDropdown(teachers, 'ce-teacher-container', 'ce-teacher');
-            },
-
-            addTeacherInline: async () => {
-                const name = document.getElementById('ce-new-teacher-name').value.trim();
-                if(!name) return;
-                app.showLoading();
-                const newId = await app.api.push('teachers', { name });
-                app.state.cache.teachers = null;
-                app.hideLoading();
-                
-                // คืนค่าอัปเดต searchable dropdown ให้รู้จักครูใหม่ทันที
-                const container = document.getElementById('ce-teacher-container');
-                if (container) {
-                    const teachers = JSON.parse(container.dataset.teachers || '[]');
-                    teachers.push({ id: newId, name: name });
-                    container.dataset.teachers = JSON.stringify(teachers);
-                    
-                    app.ui.renderTeacherListItems('ce-teacher-container', 'ce-teacher', teachers);
-                    app.ui.selectTeacherOption('ce-teacher-container', 'ce-teacher', newId, name);
-                }
-                
-                document.getElementById('ce-new-teacher-name').value = '';
-                document.getElementById('ce-new-teacher-div').classList.add('hidden');
-                app.toast.fire({icon: 'success', title: 'เพิ่มครูสำเร็จ'});
-            },
-
-            submitCreateExam: async () => {
-                const teacherId = document.getElementById('ce-teacher').value;
-                const subject = document.getElementById('ce-subject').value.trim();
-                const numQuestions = parseInt(document.getElementById('ce-num').value);
-                
-                const classCheckboxes = document.querySelectorAll('input[name="ce-classes"]:checked');
-                const selectedClasses = {};
-                classCheckboxes.forEach(cb => { selectedClasses[cb.value] = cb.dataset.name; });
-
-                if(!teacherId || !subject || isNaN(numQuestions)) return;
-                if(Object.keys(selectedClasses).length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกอย่างน้อย 1 ชั้นเรียน' });
-
-                app.showLoading();
-                const data = {
-                    teacherId,
-                    subject,
-                    numQuestions,
-                    classes: selectedClasses,
-                    timestamp: Date.now()
-                };
-                
-                await app.api.push('exams', data);
-                await app.api.logAction('สร้างรายการสอบ', `วิชา ${subject} จำนวน ${numQuestions} ข้อ`);
-                
-                app.hideLoading();
-                app.modals.close();
-                app.toast.fire({ icon: 'success', title: 'สร้างรายการสอบสำเร็จ' });
-                
-                if(app.state.currentView === 'admin-dashboard') app.loadAdminTab('admin-exams');
-                else if (app.state.currentView === 'admin-teacher-exams') app.renderView();
-                else app.renderView(); 
-            },
-
-            // 1.4 Edit Exam (Admin Only)
-            openEditExam: async (examId) => {
-                app.showLoading();
-                const [exam, tObj, cObj] = await Promise.all([
-                    app.api.get(`exams/${examId}`),
-                    app.api.get('teachers'),
-                    app.api.get('classes')
-                ]);
-                app.hideLoading();
-
-                if(!exam) return;
-
-                const teachers = tObj ? Object.entries(tObj).map(([id, t]) => ({id, ...t})) : [];
-                const classes = cObj ? Object.entries(cObj).map(([id, c]) => ({id, ...c})).sort((a,b) => a.name.localeCompare(b.name)) : [];
-
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-lg"><i class="ph ph-pencil-simple mr-2"></i>แก้ไขรายการสอบ</h3>
-                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form id="formEditExam" class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditExam('${examId}');">
-                                
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ครูผู้ออกสอบ <span class="text-red-500">*</span></label>
-                                    <!-- Searchable Dropdown Container -->
-                                    <div id="ee-teacher-container" class="w-full"></div>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อรายวิชา <span class="text-red-500">*</span></label>
-                                    <input type="text" id="ee-subject" required value="${exam.subject}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">ระดับชั้นที่สอบ (เลือกได้มากกว่า 1) <span class="text-red-500">*</span></label>
-                                    <div class="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50 grid grid-cols-2 gap-2">
-                                        ${classes.map(c => {
-                                            const isChecked = exam.classes && exam.classes[c.id];
-                                            return `
-                                                <label class="inline-flex items-center">
-                                                    <input type="checkbox" name="ee-classes" value="${c.id}" data-name="${c.name}" ${isChecked ? 'checked' : ''} class="text-primary rounded focus:ring-primary w-4 h-4 mr-2">
-                                                    <span class="text-sm text-gray-700">${c.name}</span>
-                                                </label>
-                                            `;
-                                        }).join('')}
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">จำนวนข้อสอบ <span class="text-red-500">*</span></label>
-                                    <input type="number" id="ee-num" required min="1" max="200" value="${exam.numQuestions}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary focus:border-primary text-sm bg-white">
-                                </div>
-
-                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark text-sm font-medium shadow-sm">บันทึกการแก้ไข</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-
-                // ดึงรายชื่อครูที่ถูกเลือกมาแสดงเป็นค่าเริ่มต้น
-                const selectedTeacher = teachers.find(t => t.id === exam.teacherId);
-                const initialTeacherName = selectedTeacher ? selectedTeacher.name : '';
-                app.ui.initSearchableTeacherDropdown(teachers, 'ee-teacher-container', 'ee-teacher', exam.teacherId, initialTeacherName);
-            },
-
-            submitEditExam: async (examId) => {
-                const teacherId = document.getElementById('ee-teacher').value;
-                const subject = document.getElementById('ee-subject').value.trim();
-                const numQuestions = parseInt(document.getElementById('ee-num').value);
-                
-                const classCheckboxes = document.querySelectorAll('input[name="ee-classes"]:checked');
-                const selectedClasses = {};
-                classCheckboxes.forEach(cb => { selectedClasses[cb.value] = cb.dataset.name; });
-
-                if(!teacherId || !subject || isNaN(numQuestions)) return;
-                if(Object.keys(selectedClasses).length === 0) return app.toast.fire({ icon: 'warning', title: 'กรุณาเลือกอย่างน้อย 1 ชั้นเรียน' });
-
-                app.showLoading();
-                
-                const updates = {};
-                updates[`exams/${examId}/teacherId`] = teacherId;
-                updates[`exams/${examId}/subject`] = subject;
-                updates[`exams/${examId}/numQuestions`] = numQuestions;
-                updates[`exams/${examId}/classes`] = selectedClasses;
-
-                await app.api.update(updates);
-                await app.api.logAction('แก้ไขวิชาสอบ', `แก้ไขข้อมูลวิชาสอบ ${subject} (${numQuestions} ข้อ)`);
-                
-                app.hideLoading();
-                app.modals.close();
-                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลสำเร็จ' });
-                
-                if (app.state.currentView === 'admin-teacher-exams') {
-                    const teacher = await app.api.get(`teachers/${teacherId}`);
-                    app.state.tempData.teacherName = teacher ? teacher.name : '';
-                    app.renderView();
-                } else {
-                    app.loadAdminTab('admin-exams');
-                }
-            },
-
-            // 2. Add Class
-            openAddClass: () => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-gray-800">เพิ่มชั้นเรียน</h3>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddClass();">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
-                                    <select id="ac-level" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary bg-white text-sm">
-                                        <option value="ม.1">ม.1</option><option value="ม.2">ม.2</option><option value="ม.3">ม.3</option>
-                                        <option value="ม.4">ม.4</option><option value="ม.5">ม.5</option><option value="ม.6">ม.6</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ห้องเรียน</label>
-                                    <input type="text" id="ac-room" required placeholder="เช่น 2 หรือ วิทย์-คณิต" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary text-sm bg-white">
-                                </div>
-                                <div class="flex justify-end space-x-2 pt-2">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium shadow-sm text-sm">ตกลง</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-            submitAddClass: async () => {
-                const level = document.getElementById('ac-level').value;
-                const room = document.getElementById('ac-room').value.trim();
-                const name = `${level}/${room}`;
-                
-                app.showLoading();
-                await app.api.push('classes', { level, room, name });
-                await app.api.logAction('เพิ่มชั้นเรียน', `สร้างชั้นเรียน ${name}`);
-                app.state.cache.classes = null;
-                app.hideLoading();
-                app.modals.close();
-                app.loadAdminTab('admin-classes');
-                app.toast.fire({ icon: 'success', title: `เพิ่ม ${name} สำเร็จ` });
-            },
-
-            // Edit Class (Admin panel)
-            openEditClass: (classId, level, room, oldName) => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-gray-800">แก้ไขชั้นเรียน</h3>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditClass('${classId}', '${oldName}');">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
-                                    <select id="ec-level" required class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary bg-white text-sm">
-                                        ${['ม.1','ม.2','ม.3','ม.4','ม.5','ม.6'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l}</option>`).join('')}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ห้องเรียน</label>
-                                    <input type="text" id="ec-room" required value="${room}" placeholder="เช่น 2 หรือ วิทย์-คณิต" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary text-sm bg-white">
-                                </div>
-                                <div class="flex justify-end space-x-2 pt-2">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium shadow-sm text-sm">บันทึก</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-            submitEditClass: async (classId, oldName) => {
-                const level = document.getElementById('ec-level').value;
-                const room = document.getElementById('ec-room').value.trim();
-                const newName = `${level}/${room}`;
-                
-                app.showLoading();
-                
-                const updates = {};
-                updates[`classes/${classId}/level`] = level;
-                updates[`classes/${classId}/room`] = room;
-                updates[`classes/${classId}/name`] = newName;
-                
-                if (oldName !== newName) {
-                    const allExams = await app.api.get('exams');
-                    if (allExams) {
-                        Object.entries(allExams).forEach(([eId, e]) => {
-                            if (e.classes && e.classes[classId]) {
-                                updates[`exams/${eId}/classes/${classId}`] = newName;
-                            }
-                        });
-                    }
-                }
-                
-                await app.api.update(updates);
-                if (oldName !== newName) {
-                    await app.api.logAction('แก้ไขชั้นเรียน', `เปลี่ยน ${oldName} เป็น ${newName}`);
-                }
-                
-                app.state.cache.classes = null;
-                app.hideLoading();
-                app.modals.close();
-                app.loadAdminTab('admin-classes');
-                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลชั้นเรียนสำเร็จ' });
-            },
-
-            // 3. Add Student
-            openAddStudent: (classId, className) => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-gray-800">เพิ่มนักเรียน</h3>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddStudent('${classId}', '${className}');">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">เลขที่</label>
-                                    <input type="number" id="as-no" required min="1" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">รหัสนักเรียน</label>
-                                    <input type="text" id="as-code" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
-                                    <input type="text" id="as-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
-                                </div>
-                                <div class="flex justify-end space-x-2 pt-2">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">เพิ่ม</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-            submitAddStudent: async (classId, className) => {
-                const no = parseInt(document.getElementById('as-no').value);
-                const studentCode = document.getElementById('as-code').value.trim();
-                const name = document.getElementById('as-name').value.trim();
-                
-                app.showLoading();
-                await app.api.push(`students/${classId}`, { no, studentCode, name });
-                app.hideLoading();
-                app.modals.close();
-                app.renderView(); 
-                app.toast.fire({ icon: 'success', title: 'เพิ่มนักเรียนสำเร็จ' });
-            },
-
-            // 4. Add Teacher (Admin panel)
-            openAddTeacher: () => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-gray-800">เพิ่มครูผู้สอน</h3>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitAddTeacher();">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
-                                    <input type="text" id="at-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
-                                </div>
-                                <div class="flex justify-end space-x-2 pt-2">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">เพิ่ม</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-            submitAddTeacher: async () => {
-                const name = document.getElementById('at-name').value.trim();
-                app.showLoading();
-                await app.api.push('teachers', { name });
-                await app.api.logAction('เพิ่มครู', `เพิ่มครู ${name}`);
-                app.state.cache.teachers = null;
-                app.hideLoading();
-                app.modals.close();
-                app.loadAdminTab('admin-teachers');
-                app.toast.fire({ icon: 'success', title: 'เพิ่มครูสำเร็จ' });
-            },
-
-            // 5. Edit Teacher (Admin panel - Modal Overlay)
-            openEditTeacher: (id, name) => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-gray-800">แก้ไขชื่อครูผู้สอน</h3>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <form class="p-6 space-y-4" onsubmit="event.preventDefault(); app.modals.submitEditTeacher('${id}');">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-สกุล</label>
-                                    <input type="text" id="et-name" required value="${name}" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:border-primary focus:ring-1 focus:ring-primary text-sm bg-white">
-                                </div>
-                                <div class="flex justify-end space-x-2 pt-2">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">ยกเลิก</button>
-                                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark font-medium text-sm shadow-sm">บันทึก</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-            submitEditTeacher: async (id) => {
-                const name = document.getElementById('et-name').value.trim();
-                if(!name) return;
-                app.showLoading();
-                await app.api.set(`teachers/${id}/name`, name);
-                await app.api.logAction('แก้ไขชื่อครู', `แก้ไขข้อมูลครูรหัส ${id} เป็น ${name}`);
-                app.state.cache.teachers = null; 
-                app.hideLoading();
-                app.modals.close();
-                app.loadAdminTab('admin-teachers');
-                app.toast.fire({ icon: 'success', title: 'แก้ไขข้อมูลสำเร็จ' });
-            },
-
-            // 6. View Deleted Scores (History)
-            openDeletedScores: async (historyId) => {
-                app.showLoading();
-                const historyItem = await app.api.get(`history/${historyId}`);
-                if(!historyItem || !historyItem.extraData || !historyItem.extraData.deletedScores) {
-                    app.hideLoading();
-                    return app.toast.fire({ icon: 'error', title: 'ไม่พบข้อมูลคะแนนสำรอง' });
-                }
-
-                const extra = historyItem.extraData;
-                const scoresMap = extra.deletedScores; 
-                
-                const cids = Object.keys(scoresMap);
-                
-                let html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden animate-[fadeIn_0.2s_ease-out] flex flex-col max-h-[90vh]">
-                            <div class="bg-gray-100 border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                                <div>
-                                    <h3 class="font-bold text-gray-800"><i class="ph ph-clock-counter-clockwise mr-1 text-primary"></i> ข้อมูลคะแนนเดิมที่ถูกลบ</h3>
-                                    <p class="text-xs text-gray-500 mt-1">วิชา: <span class="font-semibold text-gray-700">${extra.subject || '-'}</span> | ห้องที่ลบ: <span class="font-semibold text-gray-700">${extra.className || '-'}</span></p>
-                                </div>
-                                <button onclick="app.modals.close()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            
-                            <div class="flex border-b border-gray-200 bg-gray-50 overflow-x-auto hide-scroll px-4">
-                `;
-
-                for(let i=0; i<cids.length; i++) {
-                    const cid = cids[i];
-                    const className = scoresMap[cid]._metadata?.className || extra.className.split(', ')[i] || `ห้องรหัส ${cid}`;
-                    html += `
-                        <button class="backup-tab-btn ${i === 0 ? 'text-primary border-b-2 border-primary font-bold' : 'text-gray-500'} py-3 px-4 text-sm focus:outline-none transition-colors" 
-                                data-cid="${cid}" onclick="app.ui.switchBackupClassTab('${historyId}', '${cid}')">
-                            ${className}
-                        </button>
-                    `;
-                }
-
-                html += `
-                            </div>
-                            <div class="p-0 overflow-y-auto flex-1" id="backup-scores-table-container">
-                                <div class="text-center py-10"><i class="ph ph-spinner animate-spin text-3xl text-primary"></i></div>
-                            </div>
-                            <div class="p-4 border-t border-gray-200 bg-white text-right">
-                                <button onclick="app.modals.close()" class="px-6 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-200 font-medium shadow-sm">ปิดหน้าต่าง</button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-
-                if (cids.length > 0) {
-                    await app.ui.switchBackupClassTab(historyId, cids[0]);
-                }
-                app.hideLoading(); 
-            },
-
-            // 7. Smart Import Excel Modal Overlay (New Feature!)
-            openImportExcel: () => {
-                const html = `
-                    <div class="fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
-                        <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-[fadeIn_0.2s_ease-out]">
-                            <div class="bg-primary text-white px-6 py-4 flex justify-between items-center">
-                                <h3 class="font-bold text-lg flex items-center"><i class="ph ph-file-xls mr-2 text-2xl"></i>นำเข้าข้อมูลจาก Excel (.xlsx)</h3>
-                                <button onclick="app.modals.close()" class="hover:text-red-200"><i class="ph ph-x text-xl"></i></button>
-                            </div>
-                            <div class="p-6 space-y-4">
-                                <div class="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-lg text-xs space-y-2">
-                                    <h4 class="font-bold text-sm">💡 คำแนะนำการเตรียมไฟล์ Excel:</h4>
-                                    <p>ไฟล์ Excel ของท่านต้องมีคอลัมน์สำคัญดังต่อไปนี้ในแผ่นงานแรก:</p>
-                                    <ul class="list-disc pl-4 space-y-1 font-semibold">
-                                        <li>ระดับชั้น (เช่น ม.1/1, ม.4/2 หรือ ม.6/วิทย์-คณิต)</li>
-                                        <li>เลขที่ (เลขที่ของนักเรียน)</li>
-                                        <li>รหัสนักเรียน (รหัสประจำตัว)</li>
-                                        <li>ชื่อสกุล (ชื่อและนามสกุลของนักเรียน)</li>
-                                    </ul>
-                                    <p class="text-xxs text-blue-600 mt-1">*ระบบจะทำการสร้างห้องเรียนใหม่ให้โดยอัตโนมัติหากห้องเรียนนั้นยังไม่มีอยู่ในฐานข้อมูล</p>
-                                </div>
-                                
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">เลือกไฟล์ Excel ของท่าน</label>
-                                    <input type="file" id="excelFileInput" accept=".xlsx, .xls" 
-                                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-primary-dark cursor-pointer border border-gray-300 rounded-lg p-1 bg-gray-50">
-                                </div>
-
-                                <div class="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                                    <button type="button" onclick="app.modals.close()" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">ยกเลิก</button>
-                                    <button type="button" onclick="app.modals.submitImportExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium shadow-sm">เริ่มนำเข้าข้อมูล</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('modalContainer').innerHTML = html;
-            },
-
-            submitImportExcel: () => {
-                const fileInput = document.getElementById('excelFileInput');
-                if (fileInput.files.length === 0) {
-                    return Swal.fire({ icon: 'warning', title: 'ไม่ได้เลือกไฟล์', text: 'กรุณาเลือกไฟล์ Excel .xlsx ก่อนกดปุ่มนำเข้า', confirmButtonColor: '#F52746' });
-                }
-                app.actions.importFromExcel(fileInput.files[0]);
             }
         };
 
